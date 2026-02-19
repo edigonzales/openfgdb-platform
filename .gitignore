@@ -72,9 +72,17 @@ dependency-reduced-pom.xml
 # Gradle
 ############################################
 
+# Gradle Cache & Builds ignorieren
 .gradle/
-build/
-!gradle/wrapper/gradle-wrapper.jar
+**/.gradle/
+**/build/
+
+# Gradle Wrapper immer behalten
+!**/gradle/wrapper/gradle-wrapper.jar
+!**/gradle/wrapper/gradle-wrapper.properties
+!**/gradlew
+!**/gradlew.bat
+
 
 ############################################
 # Multi-Module / Subprojekte
