@@ -1,0 +1,201 @@
+name: openfgdb4j-native-matrix
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - '**'
+  pull_request:
+
+jobs:
+  build_test_package:
+    name: build-test-package-${{ matrix.id }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux-amd64
+            runs_on: ubuntu-24.04
+            target_os: linux
+            target_arch: amd64
+            runner_kind: unix
+            artifact_name: openfgdb4j-bin-linux-amd64
+          - id: linux-arm64
+            runs_on: ubuntu-24.04-arm
+            target_os: linux
+            target_arch: arm64
+            runner_kind: unix
+            artifact_name: openfgdb4j-bin-linux-arm64
+          - id: macos-amd64
+            runs_on: macos-15-intel
+            target_os: macos
+            target_arch: amd64
+            runner_kind: unix
+            artifact_name: openfgdb4j-bin-macos-amd64
+          - id: macos-arm64
+            runs_on: macos-15
+            target_os: macos
+            target_arch: arm64
+            runner_kind: unix
+            artifact_name: openfgdb4j-bin-macos-arm64
+          - id: windows-amd64
+            runs_on: windows-2025
+            target_os: windows
+            target_arch: amd64
+            runner_kind: windows
+            artifact_name: openfgdb4j-bin-windows-amd64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Make Unix scripts executable
+        if: matrix.runner_kind == 'unix'
+        shell: bash
+        run: |
+          chmod +x gdal-minimal/scripts/*.sh
+          chmod +x openfgdb4j/scripts/*.sh
+          chmod +x openfgdb4j/scripts/ci/*.sh
+
+      - name: Build and test (Unix)
+        if: matrix.runner_kind == 'unix'
+        shell: bash
+        env:
+          OPENFGDB4J_TARGET_OS: ${{ matrix.target_os }}
+          OPENFGDB4J_TARGET_ARCH: ${{ matrix.target_arch }}
+          CMAKE_BIN: cmake
+          OPENFGDB4J_CMAKE_GENERATOR: Unix Makefiles
+        run: |
+          openfgdb4j/scripts/ci/build-and-test-unix.sh
+
+      - name: Setup MSVC developer command prompt (Windows)
+        if: matrix.runner_kind == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Build and test (Windows)
+        if: matrix.runner_kind == 'windows'
+        shell: pwsh
+        env:
+          OPENFGDB4J_TARGET_OS: ${{ matrix.target_os }}
+          OPENFGDB4J_TARGET_ARCH: ${{ matrix.target_arch }}
+          OPENFGDB4J_GDAL_MINIMAL_REBUILD: '1'
+          CMAKE_BIN: cmake
+          OPENFGDB4J_CMAKE_GENERATOR: Visual Studio 17 2022
+        run: |
+          ./openfgdb4j/scripts/ci/build-and-test-windows.ps1
+
+      - name: Package artifact (Unix)
+        if: matrix.runner_kind == 'unix'
+        shell: bash
+        env:
+          OPENFGDB4J_TARGET_OS: ${{ matrix.target_os }}
+          OPENFGDB4J_TARGET_ARCH: ${{ matrix.target_arch }}
+        run: |
+          openfgdb4j/scripts/ci/package-artifact.sh "openfgdb4j/build/artifacts/${{ matrix.artifact_name }}"
+
+      - name: Package artifact (Windows)
+        if: matrix.runner_kind == 'windows'
+        shell: pwsh
+        env:
+          OPENFGDB4J_TARGET_OS: ${{ matrix.target_os }}
+          OPENFGDB4J_TARGET_ARCH: ${{ matrix.target_arch }}
+        run: |
+          ./openfgdb4j/scripts/ci/package-artifact.ps1 -ArtifactDir "openfgdb4j/build/artifacts/${{ matrix.artifact_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: openfgdb4j/build/artifacts/${{ matrix.artifact_name }}
+          if-no-files-found: error
+          retention-days: 2
+
+  artifact_index:
+    name: artifact-index
+    runs-on: ubuntu-24.04
+    needs: build_test_package
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: openfgdb4j-artifacts
+
+      - name: Validate artifact completeness
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="$PWD/openfgdb4j-artifacts"
+          expected=(
+            openfgdb4j-bin-linux-amd64
+            openfgdb4j-bin-linux-arm64
+            openfgdb4j-bin-macos-amd64
+            openfgdb4j-bin-macos-arm64
+            openfgdb4j-bin-windows-amd64
+          )
+
+          : > artifact-index.txt
+          for name in "${expected[@]}"; do
+            dir="$root/$name"
+            test -d "$dir"
+            test -f "$dir/metadata/manifest.json"
+            test -f "$dir/metadata/sha256sums.txt"
+            test -f "$dir/java/openfgdb4j.jar"
+            test -f "$dir/include/openfgdb_c_api.h"
+            if [[ "$name" == *windows* ]]; then
+              ls "$dir/native"/openfgdb.dll >/dev/null
+            elif [[ "$name" == *macos* ]]; then
+              ls "$dir/native"/libopenfgdb.dylib >/dev/null
+            else
+              ls "$dir/native"/libopenfgdb.so >/dev/null
+            fi
+            echo "$name OK" >> artifact-index.txt
+          done
+
+          find "$root" -maxdepth 3 -type f | sort > artifact-files.txt
+
+      - name: Upload artifact index
+        uses: actions/upload-artifact@v4
+        with:
+          name: openfgdb4j-artifact-index
+          path: |
+            artifact-index.txt
+            artifact-files.txt
+          if-no-files-found: error
+          retention-days: 2
+
+  publish_snapshots:
+    name: publish-openfgdb4j-snapshots
+    runs-on: ubuntu-24.04
+    if: github.event_name != 'pull_request'
+    needs: artifact_index
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Download matrix artifacts for natives staging
+        uses: actions/download-artifact@v4
+        with:
+          path: openfgdb4j/build/artifacts
+
+      - name: Publish API and natives snapshots
+        shell: bash
+        env:
+          OPENFGDB4J_VERSION: 0.1.0-SNAPSHOT
+          OPENFGDB4J_NATIVE_ARTIFACTS_DIR: openfgdb4j/build/artifacts
+          SOGEO_SNAPSHOTS_USER: ${{ secrets.MAVEN_USER }}
+          SOGEO_SNAPSHOTS_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
+        run: |
+          ./openfgdb4j/gradlew -p openfgdb4j publishAllPublicationsToSogeoSnapshotsRepository --stacktrace

@@ -1,0 +1,195 @@
+group = 'ch.so.agi'
+version = resolveVersion()
+
+apply plugin: 'java'
+apply plugin: 'maven-publish'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+def javaRelease = Integer.parseInt(resolvePropertyOrEnv('openfgdb4j.javaRelease', 'OPENFGDB4J_JAVA_RELEASE', '22'))
+
+def sourceSetMainJava = [
+        'src/main/java',
+        'src/generated/java'
+]
+
+def sourceSetMainResources = [
+        'src/main/resources'
+]
+
+def sourceSetTestJava = [
+        'src/test/java'
+]
+
+def sourceSetTestResources = [
+        'src/test/resources'
+]
+
+sourceSets {
+    main {
+        java {
+            srcDirs = sourceSetMainJava
+        }
+        resources {
+            srcDirs = sourceSetMainResources
+        }
+    }
+    test {
+        java {
+            srcDirs = sourceSetTestJava
+        }
+        resources {
+            srcDirs = sourceSetTestResources
+        }
+    }
+}
+
+task ensureJavaRelease {
+    doLast {
+        if (!JavaVersion.current().isCompatibleWith(JavaVersion.toVersion(javaRelease))) {
+            throw new GradleException("JDK ${javaRelease}+ is required (detected ${JavaVersion.current()})")
+        }
+    }
+}
+
+compileJava.dependsOn ensureJavaRelease
+compileTestJava.dependsOn ensureJavaRelease
+
+compileJava.options.compilerArgs = ['--release', String.valueOf(javaRelease)]
+compileJava.options.encoding = 'US-ASCII'
+compileTestJava.options.compilerArgs = ['--release', String.valueOf(javaRelease)]
+compileTestJava.options.encoding = 'US-ASCII'
+
+dependencies {
+    testImplementation 'junit:junit:4.13.2'
+}
+
+def nativeMatrix = [
+        [platform: 'linux-amd64', library: 'libopenfgdb.so'],
+        [platform: 'linux-arm64', library: 'libopenfgdb.so'],
+        [platform: 'macos-amd64', library: 'libopenfgdb.dylib'],
+        [platform: 'macos-arm64', library: 'libopenfgdb.dylib'],
+        [platform: 'windows-amd64', library: 'openfgdb.dll']
+]
+
+def nativeArtifactsRoot = file(resolvePropertyOrEnv(
+        'openfgdb4j.nativeArtifactsDir',
+        'OPENFGDB4J_NATIVE_ARTIFACTS_DIR',
+        "${projectDir}/build/artifacts"))
+
+def stagedNativeResourcesDir = file("${buildDir}/staged-native-resources")
+
+task stageNativeMatrix {
+    outputs.dir(stagedNativeResourcesDir)
+    doLast {
+        delete(stagedNativeResourcesDir)
+
+        def missing = []
+        nativeMatrix.each { entry ->
+            def artifactDir = new File(nativeArtifactsRoot, "openfgdb4j-bin-${entry.platform}")
+            def sourceFile = new File(artifactDir, "native/${entry.library}")
+            if (!sourceFile.exists()) {
+                missing.add(sourceFile.absolutePath)
+                return
+            }
+
+            copy {
+                from sourceFile
+                into new File(stagedNativeResourcesDir, "META-INF/openfgdb4j/native/${entry.platform}")
+                rename { entry.library }
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            throw new GradleException(
+                    "Missing native matrix artifacts under ${nativeArtifactsRoot}.\n"
+                            + "Expected files:\n- "
+                            + missing.join('\n- ')
+                            + "\nRun the platform matrix packaging first.")
+        }
+    }
+}
+
+jar {
+    archiveBaseName.set('openfgdb4j-api')
+    manifest {
+        attributes(
+                'Implementation-Title': 'openfgdb4j API',
+                'Implementation-Version': project.version,
+                'Automatic-Module-Name': 'ch.ehi.openfgdb4j'
+        )
+    }
+}
+
+task nativesJar(type: Jar, dependsOn: stageNativeMatrix) {
+    archiveBaseName.set('openfgdb4j-natives')
+    from stagedNativeResourcesDir
+    manifest {
+        attributes(
+                'Implementation-Title': 'openfgdb4j Natives',
+                'Implementation-Version': project.version
+        )
+    }
+}
+
+tasks.withType(Test) {
+    useJUnit()
+    testLogging.exceptionFormat = 'full'
+    jvmArgs '--enable-native-access=ALL-UNNAMED'
+}
+
+def mavenUser = resolvePropertyOrEnv('mavenUser', 'MAVEN_USER', '')
+def mavenPassword = resolvePropertyOrEnv('mavenPassword', 'MAVEN_PASSWORD', '')
+
+publishing {
+    publications {
+        api(MavenPublication) {
+            from components.java
+            artifactId = 'openfgdb4j-api'
+        }
+        natives(MavenPublication) {
+            artifact(nativesJar)
+            artifactId = 'openfgdb4j-natives'
+            pom.withXml {
+                def root = asNode()
+                root.appendNode('name', 'openfgdb4j-natives')
+                root.appendNode('description', 'Native runtime libraries for openfgdb4j')
+            }
+        }
+    }
+    repositories {
+        maven {
+            name = 'sogeoServicesSnapshots'
+            url = uri('https://jars.sogeo.services/snapshots')
+            if (!mavenUser.isEmpty() || !mavenPassword.isEmpty()) {
+                credentials {
+                    username = mavenUser
+                    password = mavenPassword
+                }
+            }
+        }
+    }
+}
+
+String resolvePropertyOrEnv(String propertyName, String envName, String defaultValue) {
+    if (project.hasProperty(propertyName)) {
+        def value = project.property(propertyName)
+        if (value != null && String.valueOf(value).trim().length() > 0) {
+            return String.valueOf(value).trim()
+        }
+    }
+
+    String fromEnv = System.getenv(envName)
+    if (fromEnv != null && fromEnv.trim().length() > 0) {
+        return fromEnv.trim()
+    }
+
+    return defaultValue
+}
+
+String resolveVersion() {
+    return resolvePropertyOrEnv('openfgdb4jVersion', 'OPENFGDB4J_VERSION', '0.1.0-SNAPSHOT')
+}

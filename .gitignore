@@ -1,0 +1,141 @@
+############################################
+# Allgemein
+############################################
+
+# Logs
+*.log
+logs/
+
+# Temporäre Dateien
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# OS generierte Dateien
+############################################
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+.Spotlight-V100
+.Trashes
+
+############################################
+# Eclipse
+############################################
+
+.metadata/
+.project
+.classpath
+.settings/
+.loadpath
+.recommenders/
+
+# Eclipse spezifische Build-Ordner
+bin/
+tmp/
+
+############################################
+# Java
+############################################
+
+# Compiled class files
+*.class
+
+# Package Files
+*.jar
+*.war
+*.ear
+
+# JVM Crash Logs
+hs_err_pid*
+replay_pid*
+
+############################################
+# Maven
+############################################
+
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+
+############################################
+# Gradle
+############################################
+
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+############################################
+# Multi-Module / Subprojekte
+############################################
+
+# Ignoriere Build-Ordner in allen Unterprojekten
+**/target/
+**/build/
+**/bin/
+**/out/
+
+############################################
+# C++
+############################################
+
+# Objektdateien
+*.o
+*.obj
+*.so
+*.a
+*.dll
+*.dylib
+*.exe
+
+# CMake
+#CMakeFiles/
+#CMakeCache.txt
+#cmake_install.cmake
+#Makefile
+#compile_commands.json
+
+# Build-Verzeichnisse
+build*/
+cmake-build-*/
+
+############################################
+# VS Code (optional, falls genutzt)
+############################################
+
+.vscode/
+
+############################################
+# IntelliJ (falls gemischt genutzt)
+############################################
+
+.idea/
+*.iml
+
+############################################
+# Coverage / Reports
+############################################
+
+coverage/
+*.gcov
+*.gcda
+*.gcno
+
+############################################
+# Test-Output
+############################################
+
+test-output/
+surefire-reports/
+

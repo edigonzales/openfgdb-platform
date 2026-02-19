@@ -1,0 +1,8 @@
+# build outputs
+/build/
+
+# local gradle state
+/.gradle/
+
+# local macOS noise
+.DS_Store

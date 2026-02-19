@@ -1,0 +1,18 @@
+# Deterministic source pinning for gdal-minimal.
+# Keep values fully expanded so they are portable across shell and PowerShell.
+
+GDAL_VERSION="v3.12.0"
+GDAL_ARCHIVE="gdal-v3.12.0.tar.gz"
+GDAL_URL="https://github.com/OSGeo/gdal/archive/refs/tags/v3.12.0.tar.gz"
+GDAL_SRC_DIR="gdal-3.12.0"
+
+PROJ_VERSION="9.6.0"
+PROJ_ARCHIVE="proj-9.6.0.tar.gz"
+PROJ_URL="https://github.com/OSGeo/PROJ/archive/refs/tags/9.6.0.tar.gz"
+PROJ_SRC_DIR="proj-9.6.0"
+
+SQLITE_VERSION="3490100"
+SQLITE_YEAR="2025"
+SQLITE_ARCHIVE="sqlite-autoconf-3490100.tar.gz"
+SQLITE_URL="https://www.sqlite.org/2025/sqlite-autoconf-3490100.tar.gz"
+SQLITE_SRC_DIR="sqlite-autoconf-3490100"

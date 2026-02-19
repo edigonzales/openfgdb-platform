@@ -1,0 +1,10 @@
+/* Generated for openfgdb4j vendor-minimal build. */
+
+#ifndef GDAL_VERSION_FULL_GDAL_VERSION_H_INCLUDED
+#define GDAL_VERSION_FULL_GDAL_VERSION_H_INCLUDED
+
+#define GDAL_RELEASE_NAME "3.12.0"
+#define GDAL_RELEASE_DATE 20251108
+#define GDAL_VERSION_NUM 3120000
+
+#endif
