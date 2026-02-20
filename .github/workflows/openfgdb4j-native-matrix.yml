@@ -194,7 +194,7 @@ jobs:
         shell: bash
         env:
           OPENFGDB4J_VERSION: 0.1.0-SNAPSHOT
-          OPENFGDB4J_NATIVE_ARTIFACTS_DIR: openfgdb4j/build/artifacts
+          OPENFGDB4J_NATIVE_ARTIFACTS_DIR: build/artifacts
           MAVEN_USER: ${{ secrets.MAVEN_USER }}
           MAVEN_PASSWORD: ${{ secrets.MAVEN_PASSWORD }}
         run: |
