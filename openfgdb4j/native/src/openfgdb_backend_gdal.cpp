@@ -342,8 +342,174 @@ int find_geom_field_index_ci(OGRFeatureDefnH defn, const char* field_name) {
   return -1;
 }
 
+enum class GeometryContractKind {
+  kUnknown,
+  kPoint,
+  kMultiPoint,
+  kLine,
+  kCircularString,
+  kCompoundCurve,
+  kMultiLine,
+  kMultiCurve,
+  kPolygon,
+  kCurvePolygon,
+  kMultiPolygon,
+  kMultiSurface,
+};
+
+const char* geometry_contract_kind_name(GeometryContractKind kind) {
+  switch (kind) {
+    case GeometryContractKind::kPoint:
+      return "POINT";
+    case GeometryContractKind::kMultiPoint:
+      return "MULTIPOINT";
+    case GeometryContractKind::kLine:
+      return "LINE";
+    case GeometryContractKind::kCircularString:
+      return "CIRCULARSTRING";
+    case GeometryContractKind::kCompoundCurve:
+      return "COMPOUNDCURVE";
+    case GeometryContractKind::kMultiLine:
+      return "MULTILINE";
+    case GeometryContractKind::kMultiCurve:
+      return "MULTICURVE";
+    case GeometryContractKind::kPolygon:
+      return "POLYGON";
+    case GeometryContractKind::kCurvePolygon:
+      return "CURVEPOLYGON";
+    case GeometryContractKind::kMultiPolygon:
+      return "MULTIPOLYGON";
+    case GeometryContractKind::kMultiSurface:
+      return "MULTISURFACE";
+    default:
+      return "UNKNOWN";
+  }
+}
+
+GeometryContractKind parse_geometry_contract_kind(const std::string& kind_raw) {
+  std::string kind = to_upper_copy(trim(kind_raw));
+  if (kind == "POINT") {
+    return GeometryContractKind::kPoint;
+  }
+  if (kind == "MULTIPOINT") {
+    return GeometryContractKind::kMultiPoint;
+  }
+  if (kind == "LINE" || kind == "LINESTRING") {
+    return GeometryContractKind::kLine;
+  }
+  if (kind == "CIRCULARSTRING") {
+    return GeometryContractKind::kCircularString;
+  }
+  if (kind == "COMPOUNDCURVE") {
+    return GeometryContractKind::kCompoundCurve;
+  }
+  if (kind == "MULTILINE" || kind == "MULTILINESTRING") {
+    return GeometryContractKind::kMultiLine;
+  }
+  if (kind == "MULTICURVE") {
+    return GeometryContractKind::kMultiCurve;
+  }
+  if (kind == "POLYGON") {
+    return GeometryContractKind::kPolygon;
+  }
+  if (kind == "CURVEPOLYGON") {
+    return GeometryContractKind::kCurvePolygon;
+  }
+  if (kind == "MULTIPOLYGON") {
+    return GeometryContractKind::kMultiPolygon;
+  }
+  if (kind == "MULTISURFACE") {
+    return GeometryContractKind::kMultiSurface;
+  }
+  return GeometryContractKind::kUnknown;
+}
+
+GeometryContractKind map_ogr_geometry_to_contract_kind(OGRwkbGeometryType type) {
+  switch (wkbFlatten(type)) {
+    case wkbPoint:
+      return GeometryContractKind::kPoint;
+    case wkbMultiPoint:
+      return GeometryContractKind::kMultiPoint;
+    case wkbLineString:
+      return GeometryContractKind::kLine;
+    case wkbCircularString:
+      return GeometryContractKind::kCircularString;
+    case wkbCompoundCurve:
+      return GeometryContractKind::kCompoundCurve;
+    case wkbMultiLineString:
+      return GeometryContractKind::kMultiLine;
+    case wkbMultiCurve:
+      return GeometryContractKind::kMultiCurve;
+    case wkbPolygon:
+      return GeometryContractKind::kPolygon;
+    case wkbCurvePolygon:
+      return GeometryContractKind::kCurvePolygon;
+    case wkbMultiPolygon:
+      return GeometryContractKind::kMultiPolygon;
+    case wkbMultiSurface:
+      return GeometryContractKind::kMultiSurface;
+    default:
+      return GeometryContractKind::kUnknown;
+  }
+}
+
+OGRwkbGeometryType map_contract_kind_to_ogr_base(GeometryContractKind kind) {
+  switch (kind) {
+    case GeometryContractKind::kPoint:
+      return wkbPoint;
+    case GeometryContractKind::kMultiPoint:
+      return wkbMultiPoint;
+    case GeometryContractKind::kLine:
+      return wkbLineString;
+    case GeometryContractKind::kCircularString:
+      return wkbCircularString;
+    case GeometryContractKind::kCompoundCurve:
+      return wkbCompoundCurve;
+    case GeometryContractKind::kMultiLine:
+      return wkbMultiLineString;
+    case GeometryContractKind::kMultiCurve:
+      return wkbMultiCurve;
+    case GeometryContractKind::kPolygon:
+      return wkbPolygon;
+    case GeometryContractKind::kCurvePolygon:
+      return wkbCurvePolygon;
+    case GeometryContractKind::kMultiPolygon:
+      return wkbMultiPolygon;
+    case GeometryContractKind::kMultiSurface:
+      return wkbMultiSurface;
+    default:
+      return wkbUnknown;
+  }
+}
+
+GeometryContractKind single_kind_for_multi(GeometryContractKind kind) {
+  if (kind == GeometryContractKind::kMultiPoint) {
+    return GeometryContractKind::kPoint;
+  }
+  if (kind == GeometryContractKind::kMultiLine) {
+    return GeometryContractKind::kLine;
+  }
+  if (kind == GeometryContractKind::kMultiCurve) {
+    return GeometryContractKind::kCompoundCurve;
+  }
+  if (kind == GeometryContractKind::kMultiPolygon) {
+    return GeometryContractKind::kPolygon;
+  }
+  if (kind == GeometryContractKind::kMultiSurface) {
+    return GeometryContractKind::kCurvePolygon;
+  }
+  return GeometryContractKind::kUnknown;
+}
+
+bool is_multi_kind(GeometryContractKind kind) {
+  return kind == GeometryContractKind::kMultiPoint || kind == GeometryContractKind::kMultiLine ||
+         kind == GeometryContractKind::kMultiCurve || kind == GeometryContractKind::kMultiPolygon ||
+         kind == GeometryContractKind::kMultiSurface;
+}
+
 struct GeometrySqlColumnSpec {
   std::string name;
+  GeometryContractKind contract_kind = GeometryContractKind::kUnknown;
   OGRwkbGeometryType ogr_type = wkbUnknown;
   int epsg = 0;
   bool nullable = true;
@@ -389,17 +555,14 @@ bool decode_byte_literal_value(const std::string& in, std::vector<GByte>* out) {
   return true;
 }
 
-OGRwkbGeometryType map_geometry_kind(const std::string& kind_raw, int dim) {
-  std::string kind = to_upper_copy(trim(kind_raw));
-  OGRwkbGeometryType base = wkbUnknown;
-  if (kind == "POINT") {
-    base = wkbPoint;
-  } else if (kind == "LINE") {
-    base = wkbLineString;
-  } else if (kind == "POLYGON") {
-    base = wkbPolygon;
-  } else {
+OGRwkbGeometryType map_geometry_kind(const std::string& kind_raw, int dim, GeometryContractKind* out_kind) {
+  GeometryContractKind kind = parse_geometry_contract_kind(kind_raw);
+  OGRwkbGeometryType base = map_contract_kind_to_ogr_base(kind);
+  if (base == wkbUnknown) {
     return wkbUnknown;
+  }
+  if (out_kind != nullptr) {
+    *out_kind = kind;
   }
   if (dim == 3) {
     return wkbSetZ(base);
@@ -408,6 +571,440 @@ OGRwkbGeometryType map_geometry_kind(const std::string& kind_raw, int dim) {
     return base;
   }
   return wkbUnknown;
+}
+
+GeometryContractKind get_declared_geom_kind(OGRFeatureH feat, int geom_idx) {
+  if (feat == nullptr || geom_idx < 0) {
+    return GeometryContractKind::kUnknown;
+  }
+  OGRFeatureDefnH defn = OGR_F_GetDefnRef(feat);
+  if (defn == nullptr || geom_idx >= OGR_FD_GetGeomFieldCount(defn)) {
+    return GeometryContractKind::kUnknown;
+  }
+  OGRGeomFieldDefnH geom_defn = OGR_FD_GetGeomFieldDefn(defn, geom_idx);
+  if (geom_defn == nullptr) {
+    return GeometryContractKind::kUnknown;
+  }
+  return map_ogr_geometry_to_contract_kind(OGR_GFld_GetType(geom_defn));
+}
+
+bool check_geometry_contract_kind(GeometryContractKind declared_kind, OGRGeometryH geom, std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (geom == nullptr) {
+    return true;
+  }
+  if (declared_kind == GeometryContractKind::kUnknown) {
+    return true;
+  }
+  GeometryContractKind actual_kind = map_ogr_geometry_to_contract_kind(OGR_G_GetGeometryType(geom));
+  if (declared_kind == actual_kind) {
+    return true;
+  }
+  if (out_error != nullptr) {
+    *out_error = "geometry type mismatch: expected ";
+    *out_error += geometry_contract_kind_name(declared_kind);
+    *out_error += ", got ";
+    *out_error += geometry_contract_kind_name(actual_kind);
+  }
+  return false;
+}
+
+bool check_geometry_contract(OGRFeatureH feat, int geom_idx, OGRGeometryH geom, std::string* out_error) {
+  GeometryContractKind declared_kind = get_declared_geom_kind(feat, geom_idx);
+  return check_geometry_contract_kind(declared_kind, geom, out_error);
+}
+
+OGRGeometryH curvepolygon_from_polygon_like(OGRGeometryH polygon_like, std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (polygon_like == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "missing polygon geometry";
+    }
+    return nullptr;
+  }
+  OGRwkbGeometryType source_type = OGR_G_GetGeometryType(polygon_like);
+  OGRwkbGeometryType target_type = OGR_GT_HasZ(source_type) ? wkbSetZ(wkbCurvePolygon) : wkbCurvePolygon;
+  OGRGeometryH curve_polygon = OGR_G_CreateGeometry(target_type);
+  if (curve_polygon == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "failed to allocate CURVEPOLYGON";
+    }
+    return nullptr;
+  }
+  int ring_count = OGR_G_GetGeometryCount(polygon_like);
+  for (int i = 0; i < ring_count; i++) {
+    OGRGeometryH ring = OGR_G_GetGeometryRef(polygon_like, i);
+    if (ring == nullptr) {
+      OGR_G_DestroyGeometry(curve_polygon);
+      if (out_error != nullptr) {
+        *out_error = "failed to access polygon ring";
+      }
+      return nullptr;
+    }
+    OGRwkbGeometryType ring_type = OGR_G_GetGeometryType(ring);
+    OGRwkbGeometryType ring_line_type = OGR_GT_HasZ(ring_type) ? wkbSetZ(wkbLineString) : wkbLineString;
+    OGRGeometryH ring_curve = OGR_G_CreateGeometry(ring_line_type);
+    if (ring_curve == nullptr) {
+      OGR_G_DestroyGeometry(curve_polygon);
+      if (out_error != nullptr) {
+        *out_error = "failed to allocate curve polygon ring";
+      }
+      return nullptr;
+    }
+    int point_count = OGR_G_GetPointCount(ring);
+    for (int p = 0; p < point_count; p++) {
+      double x = OGR_G_GetX(ring, p);
+      double y = OGR_G_GetY(ring, p);
+      if (OGR_GT_HasZ(ring_type)) {
+        double z = OGR_G_GetZ(ring, p);
+        OGR_G_AddPoint(ring_curve, x, y, z);
+      } else {
+        OGR_G_AddPoint_2D(ring_curve, x, y);
+      }
+    }
+    OGRErr err = OGR_G_AddGeometry(curve_polygon, ring_curve);
+    OGR_G_DestroyGeometry(ring_curve);
+    if (err != OGRERR_NONE) {
+      OGR_G_DestroyGeometry(curve_polygon);
+      if (out_error != nullptr) {
+        *out_error = "failed to add ring to CURVEPOLYGON";
+      }
+      return nullptr;
+    }
+  }
+  return curve_polygon;
+}
+
+OGRGeometryH promote_curve_geometry_for_read(GeometryContractKind declared_kind, GeometryContractKind actual_kind,
+                                             OGRGeometryH geom, std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (geom == nullptr) {
+    return nullptr;
+  }
+
+  if (declared_kind == GeometryContractKind::kCompoundCurve) {
+    OGRGeometryH single_curve = geom;
+    if (actual_kind == GeometryContractKind::kMultiLine || actual_kind == GeometryContractKind::kMultiCurve) {
+      int part_count = OGR_G_GetGeometryCount(geom);
+      if (part_count != 1) {
+        if (out_error != nullptr) {
+          *out_error = "geometry contract violation: expected COMPOUNDCURVE with exactly one part";
+        }
+        return nullptr;
+      }
+      single_curve = OGR_G_GetGeometryRef(geom, 0);
+      if (single_curve == nullptr) {
+        if (out_error != nullptr) {
+          *out_error = "geometry contract violation: missing curve part";
+        }
+        return nullptr;
+      }
+    }
+    OGRwkbGeometryType source_type = OGR_G_GetGeometryType(single_curve);
+    OGRwkbGeometryType target_type = OGR_GT_HasZ(source_type) ? wkbSetZ(wkbCompoundCurve) : wkbCompoundCurve;
+    OGRGeometryH compound_curve = OGR_G_CreateGeometry(target_type);
+    if (compound_curve == nullptr) {
+      if (out_error != nullptr) {
+        *out_error = "failed to allocate COMPOUNDCURVE";
+      }
+      return nullptr;
+    }
+    OGRGeometryH curve_clone = OGR_G_Clone(single_curve);
+    if (curve_clone == nullptr) {
+      OGR_G_DestroyGeometry(compound_curve);
+      if (out_error != nullptr) {
+        *out_error = "failed to clone curve part";
+      }
+      return nullptr;
+    }
+    OGRErr err = OGR_G_AddGeometry(compound_curve, curve_clone);
+    OGR_G_DestroyGeometry(curve_clone);
+    if (err != OGRERR_NONE) {
+      OGR_G_DestroyGeometry(compound_curve);
+      if (out_error != nullptr) {
+        *out_error = "failed to build COMPOUNDCURVE geometry";
+      }
+      return nullptr;
+    }
+    return compound_curve;
+  }
+
+  if (declared_kind == GeometryContractKind::kMultiCurve) {
+    OGRwkbGeometryType source_type = OGR_G_GetGeometryType(geom);
+    OGRwkbGeometryType target_type = OGR_GT_HasZ(source_type) ? wkbSetZ(wkbMultiCurve) : wkbMultiCurve;
+    OGRGeometryH multi_curve = OGR_G_CreateGeometry(target_type);
+    if (multi_curve == nullptr) {
+      if (out_error != nullptr) {
+        *out_error = "failed to allocate MULTICURVE";
+      }
+      return nullptr;
+    }
+    if (actual_kind == GeometryContractKind::kLine || actual_kind == GeometryContractKind::kCircularString ||
+        actual_kind == GeometryContractKind::kCompoundCurve) {
+      OGRGeometryH curve_clone = OGR_G_Clone(geom);
+      if (curve_clone == nullptr) {
+        OGR_G_DestroyGeometry(multi_curve);
+        if (out_error != nullptr) {
+          *out_error = "failed to clone curve";
+        }
+        return nullptr;
+      }
+      OGRErr err = OGR_G_AddGeometry(multi_curve, curve_clone);
+      OGR_G_DestroyGeometry(curve_clone);
+      if (err != OGRERR_NONE) {
+        OGR_G_DestroyGeometry(multi_curve);
+        if (out_error != nullptr) {
+          *out_error = "failed to build MULTICURVE geometry";
+        }
+        return nullptr;
+      }
+      return multi_curve;
+    }
+    int part_count = OGR_G_GetGeometryCount(geom);
+    for (int i = 0; i < part_count; i++) {
+      OGRGeometryH part = OGR_G_GetGeometryRef(geom, i);
+      if (part == nullptr) {
+        OGR_G_DestroyGeometry(multi_curve);
+        if (out_error != nullptr) {
+          *out_error = "failed to access curve part";
+        }
+        return nullptr;
+      }
+      OGRGeometryH part_clone = OGR_G_Clone(part);
+      if (part_clone == nullptr) {
+        OGR_G_DestroyGeometry(multi_curve);
+        if (out_error != nullptr) {
+          *out_error = "failed to clone curve part";
+        }
+        return nullptr;
+      }
+      OGRErr err = OGR_G_AddGeometry(multi_curve, part_clone);
+      OGR_G_DestroyGeometry(part_clone);
+      if (err != OGRERR_NONE) {
+        OGR_G_DestroyGeometry(multi_curve);
+        if (out_error != nullptr) {
+          *out_error = "failed to build MULTICURVE geometry";
+        }
+        return nullptr;
+      }
+    }
+    return multi_curve;
+  }
+
+  if (declared_kind == GeometryContractKind::kCurvePolygon) {
+    if (actual_kind == GeometryContractKind::kCurvePolygon) {
+      return OGR_G_Clone(geom);
+    }
+    if (actual_kind == GeometryContractKind::kPolygon) {
+      return curvepolygon_from_polygon_like(geom, out_error);
+    }
+    if (actual_kind == GeometryContractKind::kMultiPolygon || actual_kind == GeometryContractKind::kMultiSurface) {
+      int part_count = OGR_G_GetGeometryCount(geom);
+      if (part_count != 1) {
+        if (out_error != nullptr) {
+          *out_error = "geometry contract violation: expected CURVEPOLYGON with exactly one surface";
+        }
+        return nullptr;
+      }
+      OGRGeometryH first_surface = OGR_G_GetGeometryRef(geom, 0);
+      if (first_surface == nullptr) {
+        if (out_error != nullptr) {
+          *out_error = "geometry contract violation: missing polygon surface";
+        }
+        return nullptr;
+      }
+      return curvepolygon_from_polygon_like(first_surface, out_error);
+    }
+  }
+
+  if (declared_kind == GeometryContractKind::kMultiSurface) {
+    OGRwkbGeometryType source_type = OGR_G_GetGeometryType(geom);
+    OGRwkbGeometryType target_type = OGR_GT_HasZ(source_type) ? wkbSetZ(wkbMultiSurface) : wkbMultiSurface;
+    OGRGeometryH multi_surface = OGR_G_CreateGeometry(target_type);
+    if (multi_surface == nullptr) {
+      if (out_error != nullptr) {
+        *out_error = "failed to allocate MULTISURFACE";
+      }
+      return nullptr;
+    }
+    if (actual_kind == GeometryContractKind::kPolygon || actual_kind == GeometryContractKind::kCurvePolygon) {
+      OGRGeometryH curve_polygon = nullptr;
+      if (actual_kind == GeometryContractKind::kCurvePolygon) {
+        curve_polygon = OGR_G_Clone(geom);
+      } else {
+        curve_polygon = curvepolygon_from_polygon_like(geom, out_error);
+      }
+      if (curve_polygon == nullptr) {
+        OGR_G_DestroyGeometry(multi_surface);
+        return nullptr;
+      }
+      OGRErr err = OGR_G_AddGeometry(multi_surface, curve_polygon);
+      OGR_G_DestroyGeometry(curve_polygon);
+      if (err != OGRERR_NONE) {
+        OGR_G_DestroyGeometry(multi_surface);
+        if (out_error != nullptr) {
+          *out_error = "failed to build MULTISURFACE geometry";
+        }
+        return nullptr;
+      }
+      return multi_surface;
+    }
+    int part_count = OGR_G_GetGeometryCount(geom);
+    for (int i = 0; i < part_count; i++) {
+      OGRGeometryH polygon_part = OGR_G_GetGeometryRef(geom, i);
+      if (polygon_part == nullptr) {
+        OGR_G_DestroyGeometry(multi_surface);
+        if (out_error != nullptr) {
+          *out_error = "failed to access polygon part";
+        }
+        return nullptr;
+      }
+      OGRGeometryH curve_polygon = curvepolygon_from_polygon_like(polygon_part, out_error);
+      if (curve_polygon == nullptr) {
+        OGR_G_DestroyGeometry(multi_surface);
+        return nullptr;
+      }
+      OGRErr err = OGR_G_AddGeometry(multi_surface, curve_polygon);
+      OGR_G_DestroyGeometry(curve_polygon);
+      if (err != OGRERR_NONE) {
+        OGR_G_DestroyGeometry(multi_surface);
+        if (out_error != nullptr) {
+          *out_error = "failed to build MULTISURFACE geometry";
+        }
+        return nullptr;
+      }
+    }
+    return multi_surface;
+  }
+
+  return nullptr;
+}
+
+bool normalize_geometry_for_read_kind(
+    GeometryContractKind declared_kind,
+    OGRGeometryH geom,
+    OGRGeometryH* out_geom,
+    std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (out_geom == nullptr) {
+    return false;
+  }
+  *out_geom = nullptr;
+  if (geom == nullptr) {
+    return true;
+  }
+
+  GeometryContractKind actual_kind = map_ogr_geometry_to_contract_kind(OGR_G_GetGeometryType(geom));
+  if (declared_kind == GeometryContractKind::kUnknown || declared_kind == actual_kind) {
+    *out_geom = OGR_G_Clone(geom);
+    if (*out_geom == nullptr && out_error != nullptr) {
+      *out_error = "failed to clone geometry";
+    }
+    return *out_geom != nullptr;
+  }
+
+  if (declared_kind == GeometryContractKind::kCompoundCurve || declared_kind == GeometryContractKind::kMultiCurve ||
+      declared_kind == GeometryContractKind::kCurvePolygon || declared_kind == GeometryContractKind::kMultiSurface) {
+    OGRGeometryH promoted = promote_curve_geometry_for_read(declared_kind, actual_kind, geom, out_error);
+    if (promoted != nullptr) {
+      *out_geom = promoted;
+      return true;
+    }
+    if (out_error != nullptr && out_error->empty()) {
+      *out_error = "failed to normalize curve geometry";
+    }
+    return false;
+  }
+
+  if (is_multi_kind(declared_kind) && single_kind_for_multi(declared_kind) == actual_kind) {
+    OGRwkbGeometryType base = map_contract_kind_to_ogr_base(declared_kind);
+    if (base == wkbUnknown) {
+      if (out_error != nullptr) {
+        *out_error = "failed to resolve declared geometry type";
+      }
+      return false;
+    }
+    OGRwkbGeometryType source_type = OGR_G_GetGeometryType(geom);
+    OGRwkbGeometryType target_type = OGR_GT_HasZ(source_type) ? wkbSetZ(base) : base;
+    OGRGeometryH multi = OGR_G_CreateGeometry(target_type);
+    if (multi == nullptr) {
+      if (out_error != nullptr) {
+        *out_error = "failed to allocate geometry collection";
+      }
+      return false;
+    }
+    OGRGeometryH single_clone = OGR_G_Clone(geom);
+    if (single_clone == nullptr) {
+      OGR_G_DestroyGeometry(multi);
+      if (out_error != nullptr) {
+        *out_error = "failed to clone geometry part";
+      }
+      return false;
+    }
+    OGRErr err = OGR_G_AddGeometryDirectly(multi, single_clone);
+    if (err != OGRERR_NONE) {
+      OGR_G_DestroyGeometry(single_clone);
+      OGR_G_DestroyGeometry(multi);
+      if (out_error != nullptr) {
+        *out_error = "failed to wrap single geometry as multi geometry";
+      }
+      return false;
+    }
+    *out_geom = multi;
+    return true;
+  }
+
+  if (!is_multi_kind(declared_kind) && is_multi_kind(actual_kind) && single_kind_for_multi(actual_kind) == declared_kind) {
+    int part_count = OGR_G_GetGeometryCount(geom);
+    if (part_count != 1) {
+      if (out_error != nullptr) {
+        *out_error = "geometry contract violation: ";
+        *out_error += geometry_contract_kind_name(declared_kind);
+        *out_error += " column contains ";
+        *out_error += std::to_string(part_count);
+        *out_error += " parts";
+      }
+      return false;
+    }
+    OGRGeometryH part = OGR_G_GetGeometryRef(geom, 0);
+    if (part == nullptr) {
+      if (out_error != nullptr) {
+        *out_error = "geometry contract violation: missing first geometry part";
+      }
+      return false;
+    }
+    *out_geom = OGR_G_Clone(part);
+    if (*out_geom == nullptr && out_error != nullptr) {
+      *out_error = "failed to clone single geometry part";
+    }
+    return *out_geom != nullptr;
+  }
+
+  if (out_error != nullptr) {
+    *out_error = "geometry contract violation: expected ";
+    *out_error += geometry_contract_kind_name(declared_kind);
+    *out_error += ", got ";
+    *out_error += geometry_contract_kind_name(actual_kind);
+  }
+  return false;
+}
+
+bool normalize_geometry_for_read(
+    OGRFeatureH feat,
+    int geom_idx,
+    OGRGeometryH geom,
+    OGRGeometryH* out_geom,
+    std::string* out_error) {
+  GeometryContractKind declared_kind = get_declared_geom_kind(feat, geom_idx);
+  return normalize_geometry_for_read_kind(declared_kind, geom, out_geom, out_error);
 }
 
 bool parse_ofgdb_geometry_type(
@@ -437,12 +1034,14 @@ bool parse_ofgdb_geometry_type(
   if (!parse_int32_strict(args[1], &epsg) || !parse_int32_strict(args[2], &dim)) {
     return false;
   }
-  OGRwkbGeometryType type = map_geometry_kind(args[0], dim);
+  GeometryContractKind contract_kind = GeometryContractKind::kUnknown;
+  OGRwkbGeometryType type = map_geometry_kind(args[0], dim, &contract_kind);
   if (type == wkbUnknown) {
     return false;
   }
 
   out->name = column_name;
+  out->contract_kind = contract_kind;
   out->ogr_type = type;
   out->epsg = epsg;
   out->nullable = !contains_ci(full_definition, "NOT NULL");
@@ -549,6 +1148,11 @@ bool set_geometry_from_literal(OGRFeatureH feat, int geom_idx, const std::string
   if (err != OGRERR_NONE || geom == nullptr) {
     return false;
   }
+  std::string geometry_error;
+  if (!check_geometry_contract(feat, geom_idx, geom, &geometry_error)) {
+    OGR_G_DestroyGeometry(geom);
+    return false;
+  }
   err = OGR_F_SetGeomFieldDirectly(feat, geom_idx, geom);
   if (err != OGRERR_NONE) {
     OGR_G_DestroyGeometry(geom);
@@ -575,26 +1179,6 @@ bool set_column_from_literal(OGRFeatureH feat, OGRFeatureDefnH defn, const std::
     return set_geometry_from_literal(feat, geom_idx, raw_value);
   }
   return false;
-}
-
-bool set_geometry_from_wkb_bytes(OGRFeatureH feat, int geom_idx, const uint8_t* data, int32_t size) {
-  if (feat == nullptr || geom_idx < 0 || size < 0) {
-    return false;
-  }
-  if (data == nullptr || size == 0) {
-    return OGR_F_SetGeomField(feat, geom_idx, nullptr) == OGRERR_NONE;
-  }
-  OGRGeometryH geom = nullptr;
-  OGRErr err = OGR_G_CreateFromWkb(data, nullptr, &geom, size);
-  if (err != OGRERR_NONE || geom == nullptr) {
-    return false;
-  }
-  err = OGR_F_SetGeomFieldDirectly(feat, geom_idx, geom);
-  if (err != OGRERR_NONE) {
-    OGR_G_DestroyGeometry(geom);
-    return false;
-  }
-  return true;
 }
 
 std::string format_filter_literal(OGRFeatureH feat, int field_idx) {
@@ -1212,6 +1796,9 @@ class GdalBackend final : public OpenFgdbBackend {
     if (size < 0) {
       return fail(OFGDB_ERR_INVALID_ARG, "blob size must be >= 0");
     }
+    if (data == nullptr && size > 0) {
+      return fail(OFGDB_ERR_INVALID_ARG, "blob payload missing");
+    }
     std::lock_guard<std::mutex> lock(mutex_);
     RowState* row = get_row_locked(row_handle);
     if (row == nullptr || row->kind != RowKind::kFeature || row->feature == nullptr || column_name == nullptr) {
@@ -1225,8 +1812,28 @@ class GdalBackend final : public OpenFgdbBackend {
     }
     int geom_idx = find_geom_field_index_ci(OGR_F_GetDefnRef(row->feature), column_name);
     if (geom_idx >= 0) {
-      if (!set_geometry_from_wkb_bytes(row->feature, geom_idx, data, size)) {
-        return fail_from_cpl(OFGDB_ERR_INVALID_ARG, "failed to set geometry from blob bytes");
+      if (size == 0) {
+        OGRErr err = OGR_F_SetGeomField(row->feature, geom_idx, nullptr);
+        if (err != OGRERR_NONE) {
+          return fail_from_cpl(map_ogr_error(err), "failed to clear geometry");
+        }
+        last_error_.clear();
+        return OFGDB_OK;
+      }
+      OGRGeometryH geom = nullptr;
+      OGRErr err = OGR_G_CreateFromWkb(data, nullptr, &geom, size);
+      if (err != OGRERR_NONE || geom == nullptr) {
+        return fail_from_cpl(OFGDB_ERR_INVALID_ARG, "invalid WKB geometry");
+      }
+      std::string geometry_error;
+      if (!check_geometry_contract_for_row_locked(row, geom_idx, geom, &geometry_error)) {
+        OGR_G_DestroyGeometry(geom);
+        return fail(OFGDB_ERR_INVALID_ARG, geometry_error);
+      }
+      err = OGR_F_SetGeomFieldDirectly(row->feature, geom_idx, geom);
+      if (err != OGRERR_NONE) {
+        OGR_G_DestroyGeometry(geom);
+        return fail_from_cpl(map_ogr_error(err), "failed to set geometry");
       }
       last_error_.clear();
       return OFGDB_OK;
@@ -1237,6 +1844,9 @@ class GdalBackend final : public OpenFgdbBackend {
   int set_geometry(uint64_t row_handle, const uint8_t* wkb, int32_t size) override {
     if (size < 0) {
       return fail(OFGDB_ERR_INVALID_ARG, "geometry size must be >= 0");
+    }
+    if (wkb == nullptr && size > 0) {
+      return fail(OFGDB_ERR_INVALID_ARG, "geometry payload missing");
     }
     std::lock_guard<std::mutex> lock(mutex_);
     RowState* row = get_row_locked(row_handle);
@@ -1257,6 +1867,11 @@ class GdalBackend final : public OpenFgdbBackend {
     OGRErr err = OGR_G_CreateFromWkb(wkb, nullptr, &geom, size);
     if (err != OGRERR_NONE || geom == nullptr) {
       return fail_from_cpl(OFGDB_ERR_INVALID_ARG, "invalid WKB geometry");
+    }
+    std::string geometry_error;
+    if (!check_geometry_contract_for_row_locked(row, 0, geom, &geometry_error)) {
+      OGR_G_DestroyGeometry(geom);
+      return fail(OFGDB_ERR_INVALID_ARG, geometry_error);
     }
     err = OGR_F_SetGeomFieldDirectly(row->feature, 0, geom);
     if (err != OGRERR_NONE) {
@@ -1836,27 +2451,36 @@ class GdalBackend final : public OpenFgdbBackend {
     }
     int geom_idx = find_geom_field_index_ci(OGR_F_GetDefnRef(row->feature), column_name);
     if (geom_idx >= 0) {
-      OGRGeometryH geom = OGR_F_GetGeomFieldRef(row->feature, geom_idx);
+      OGRGeometryH raw_geom = OGR_F_GetGeomFieldRef(row->feature, geom_idx);
+      OGRGeometryH geom = nullptr;
+      std::string geometry_error;
+      if (!normalize_geometry_for_row_read_locked(row, geom_idx, raw_geom, &geom, &geometry_error)) {
+        return fail(OFGDB_ERR_INTERNAL, geometry_error);
+      }
       if (geom == nullptr) {
         last_error_.clear();
         return OFGDB_OK;
       }
       int wkb_size = OGR_G_WkbSize(geom);
       if (wkb_size < 0 || wkb_size > std::numeric_limits<int32_t>::max()) {
+        OGR_G_DestroyGeometry(geom);
         return fail(OFGDB_ERR_INTERNAL, "geometry too large");
       }
       if (wkb_size > 0) {
         uint8_t* buffer = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(wkb_size)));
         if (buffer == nullptr) {
+          OGR_G_DestroyGeometry(geom);
           return fail(OFGDB_ERR_INTERNAL, "out of memory");
         }
         OGRErr err = OGR_G_ExportToWkb(geom, wkbNDR, buffer);
         if (err != OGRERR_NONE) {
+          OGR_G_DestroyGeometry(geom);
           std::free(buffer);
           return fail_from_cpl(map_ogr_error(err), "failed to export geometry to WKB");
         }
         *out_data = buffer;
       }
+      OGR_G_DestroyGeometry(geom);
       *out_size = wkb_size;
       last_error_.clear();
       return OFGDB_OK;
@@ -1880,27 +2504,36 @@ class GdalBackend final : public OpenFgdbBackend {
       last_error_.clear();
       return OFGDB_OK;
     }
-    OGRGeometryH geom = OGR_F_GetGeomFieldRef(row->feature, 0);
+    OGRGeometryH raw_geom = OGR_F_GetGeomFieldRef(row->feature, 0);
+    OGRGeometryH geom = nullptr;
+    std::string geometry_error;
+    if (!normalize_geometry_for_row_read_locked(row, 0, raw_geom, &geom, &geometry_error)) {
+      return fail(OFGDB_ERR_INTERNAL, geometry_error);
+    }
     if (geom == nullptr) {
       last_error_.clear();
       return OFGDB_OK;
     }
     int wkb_size = OGR_G_WkbSize(geom);
     if (wkb_size < 0 || wkb_size > std::numeric_limits<int32_t>::max()) {
+      OGR_G_DestroyGeometry(geom);
       return fail(OFGDB_ERR_INTERNAL, "geometry too large");
     }
     if (wkb_size > 0) {
       uint8_t* buffer = static_cast<uint8_t*>(std::malloc(static_cast<size_t>(wkb_size)));
       if (buffer == nullptr) {
+        OGR_G_DestroyGeometry(geom);
         return fail(OFGDB_ERR_INTERNAL, "out of memory");
       }
       OGRErr err = OGR_G_ExportToWkb(geom, wkbNDR, buffer);
       if (err != OGRERR_NONE) {
+        OGR_G_DestroyGeometry(geom);
         std::free(buffer);
         return fail_from_cpl(map_ogr_error(err), "failed to export geometry to WKB");
       }
       *out_wkb = buffer;
     }
+    OGR_G_DestroyGeometry(geom);
     *out_size = wkb_size;
     last_error_.clear();
     return OFGDB_OK;
@@ -1910,6 +2543,7 @@ class GdalBackend final : public OpenFgdbBackend {
   struct DbState {
     GDALDatasetH dataset = nullptr;
     std::string path;
+    std::unordered_map<std::string, std::unordered_map<std::string, GeometryContractKind>> geometry_contracts;
   };
 
   struct TableState {
@@ -1989,6 +2623,50 @@ class GdalBackend final : public OpenFgdbBackend {
       }
     }
     return nullptr;
+  }
+
+  GeometryContractKind get_declared_geom_kind_for_row_locked(const RowState* row, int geom_idx) {
+    if (row == nullptr || row->feature == nullptr || geom_idx < 0) {
+      return GeometryContractKind::kUnknown;
+    }
+    DbState* db = get_db_locked(row->db_handle);
+    if (db != nullptr) {
+      auto table_it = db->geometry_contracts.find(to_upper_copy(row->layer_name));
+      if (table_it != db->geometry_contracts.end()) {
+        OGRFeatureDefnH defn = OGR_F_GetDefnRef(row->feature);
+        if (defn != nullptr && geom_idx < OGR_FD_GetGeomFieldCount(defn)) {
+          OGRGeomFieldDefnH geom_defn = OGR_FD_GetGeomFieldDefn(defn, geom_idx);
+          if (geom_defn != nullptr) {
+            const char* geom_name = OGR_GFld_GetNameRef(geom_defn);
+            if (geom_name != nullptr) {
+              auto col_it = table_it->second.find(to_upper_copy(geom_name));
+              if (col_it != table_it->second.end()) {
+                return col_it->second;
+              }
+            }
+          }
+        }
+        if (table_it->second.size() == 1) {
+          return table_it->second.begin()->second;
+        }
+      }
+    }
+    return get_declared_geom_kind(row->feature, geom_idx);
+  }
+
+  bool check_geometry_contract_for_row_locked(const RowState* row, int geom_idx, OGRGeometryH geom, std::string* out_error) {
+    GeometryContractKind declared_kind = get_declared_geom_kind_for_row_locked(row, geom_idx);
+    return check_geometry_contract_kind(declared_kind, geom, out_error);
+  }
+
+  bool normalize_geometry_for_row_read_locked(
+      const RowState* row,
+      int geom_idx,
+      OGRGeometryH geom,
+      OGRGeometryH* out_geom,
+      std::string* out_error) {
+    GeometryContractKind declared_kind = get_declared_geom_kind_for_row_locked(row, geom_idx);
+    return normalize_geometry_for_read_kind(declared_kind, geom, out_geom, out_error);
   }
 
   static bool relationship_signature_matches(
@@ -2200,7 +2878,14 @@ class GdalBackend final : public OpenFgdbBackend {
           continue;
         }
         GeometrySqlColumnSpec geometry_spec;
-        if (parse_ofgdb_geometry_type(parts[0], parts[1], trimmed_def, &geometry_spec)) {
+        bool declared_geometry = starts_with_ci(parts[1], "OFGDB_GEOMETRY(");
+        if (declared_geometry) {
+          if (!parse_ofgdb_geometry_type(parts[0], parts[1], trimmed_def, &geometry_spec)) {
+            return fail(
+                OFGDB_ERR_INVALID_ARG,
+                "invalid OFGDB_GEOMETRY definition (allowed: POINT, MULTIPOINT, LINE, LINESTRING, CIRCULARSTRING, COMPOUNDCURVE, MULTILINE, MULTILINESTRING, MULTICURVE, POLYGON, CURVEPOLYGON, MULTIPOLYGON, MULTISURFACE): " +
+                    trimmed_def);
+          }
           geometry_defs.push_back(geometry_spec);
         } else {
           attribute_defs.push_back(trimmed_def);
@@ -2259,6 +2944,15 @@ class GdalBackend final : public OpenFgdbBackend {
           return fail_from_cpl(map_ogr_error(err), "failed to create field");
         }
       }
+      if (!geometry_defs.empty()) {
+        std::unordered_map<std::string, GeometryContractKind> table_contracts;
+        for (const GeometrySqlColumnSpec& geom : geometry_defs) {
+          table_contracts[to_upper_copy(geom.name)] = geom.contract_kind;
+        }
+        db.geometry_contracts[to_upper_copy(table_name)] = std::move(table_contracts);
+      } else {
+        db.geometry_contracts.erase(to_upper_copy(table_name));
+      }
       last_error_.clear();
       return OFGDB_OK;
     }
@@ -2290,6 +2984,7 @@ class GdalBackend final : public OpenFgdbBackend {
       if (err != OGRERR_NONE) {
         return fail_from_cpl(OFGDB_ERR_INTERNAL, "failed to drop table");
       }
+      db.geometry_contracts.erase(to_upper_copy(table_name));
       last_error_.clear();
       return OFGDB_OK;
     }

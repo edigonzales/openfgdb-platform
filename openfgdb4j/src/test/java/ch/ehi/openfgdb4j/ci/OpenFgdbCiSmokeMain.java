@@ -46,6 +46,17 @@ public final class OpenFgdbCiSmokeMain {
             api.execSql(db, "CREATE TABLE classa(T_Id INTEGER, color VARCHAR)");
             api.execSql(db, "CREATE TABLE assoc(classa_fk INTEGER)");
             api.execSql(db, "CREATE TABLE t_geom(id INTEGER, shape OFGDB_GEOMETRY(POINT,2056,2) NOT NULL)");
+            api.execSql(db, "CREATE TABLE t_multipoint(id INTEGER, shape OFGDB_GEOMETRY(MULTIPOINT,2056,2) NOT NULL)");
+            api.execSql(db, "CREATE TABLE t_line(id INTEGER, shape OFGDB_GEOMETRY(LINE,2056,2) NOT NULL)");
+            api.execSql(db, "CREATE TABLE t_multiline(id INTEGER, shape OFGDB_GEOMETRY(MULTILINE,2056,2) NOT NULL)");
+            api.execSql(db, "CREATE TABLE t_polygon(id INTEGER, shape OFGDB_GEOMETRY(POLYGON,2056,2) NOT NULL)");
+            api.execSql(db, "CREATE TABLE t_multipolygon(id INTEGER, shape OFGDB_GEOMETRY(MULTIPOLYGON,2056,2) NOT NULL)");
+            if ("gdal".equals(expectedBackend)) {
+                api.execSql(db, "CREATE TABLE t_compoundcurve(id INTEGER, shape OFGDB_GEOMETRY(COMPOUNDCURVE,2056,2) NOT NULL)");
+                api.execSql(db, "CREATE TABLE t_multicurve(id INTEGER, shape OFGDB_GEOMETRY(MULTICURVE,2056,2) NOT NULL)");
+                api.execSql(db, "CREATE TABLE t_curvepolygon(id INTEGER, shape OFGDB_GEOMETRY(CURVEPOLYGON,2056,2) NOT NULL)");
+                api.execSql(db, "CREATE TABLE t_multisurface(id INTEGER, shape OFGDB_GEOMETRY(MULTISURFACE,2056,2) NOT NULL)");
+            }
 
             api.createCodedDomain(db, "enum_color", "STRING");
             api.createCodedDomain(db, "enum_color", "STRING");
@@ -66,6 +77,16 @@ public final class OpenFgdbCiSmokeMain {
 
             runCrudRoundtrip(api, db);
             runGeometryRoundtrip(api, db);
+            runMultipointGeometryRoundtrip(api, db);
+            runMultilineGeometryRoundtrip(api, db);
+            runMultipolygonGeometryRoundtrip(api, db);
+            if ("gdal".equals(expectedBackend)) {
+                runCompoundcurveGeometryRoundtrip(api, db);
+                runMulticurveGeometryRoundtrip(api, db);
+                runCurvepolygonGeometryRoundtrip(api, db);
+                runMultisurfaceGeometryRoundtrip(api, db);
+                runStrictMismatchChecks(api, db);
+            }
         } finally {
             api.close(db);
             deleteTreeQuiet(tempRoot);
@@ -127,11 +148,319 @@ public final class OpenFgdbCiSmokeMain {
                 try {
                     byte[] wkb = api.rowGetGeometry(fetched);
                     require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value");
+                    require(wkbType(wkb) == 1, "unexpected WKB type for point rowGetGeometry: " + wkbType(wkb));
                 } finally {
                     api.closeRow(fetched);
                 }
             } finally {
                 api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runMultipointGeometryRoundtrip(OpenFgdb api, long db) throws Exception {
+        long table = api.openTable(db, "t_multipoint");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 12);
+                api.setGeometry(row, multiPointWkb(new double[][] {{2600000.5, 1200000.25}, {2600001.5, 1200001.25}}));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for multipoint roundtrip");
+                try {
+                    byte[] wkb = api.rowGetGeometry(fetched);
+                    require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for multipoint");
+                    require(wkbType(wkb) == 4, "unexpected WKB type for multipoint rowGetGeometry: " + wkbType(wkb));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runMultilineGeometryRoundtrip(OpenFgdb api, long db) throws Exception {
+        long table = api.openTable(db, "t_multiline");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 13);
+                api.setGeometry(row, multiLineStringWkb(new double[][][] {
+                        {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}},
+                        {{2600010.0, 1200010.0}, {2600012.0, 1200011.0}}
+                }));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for multiline roundtrip");
+                try {
+                    byte[] wkb = api.rowGetGeometry(fetched);
+                    require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for multiline");
+                    require(wkbType(wkb) == 5, "unexpected WKB type for multiline rowGetGeometry: " + wkbType(wkb));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runMultipolygonGeometryRoundtrip(OpenFgdb api, long db) throws Exception {
+        long table = api.openTable(db, "t_multipolygon");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 14);
+                api.setGeometry(row, multiPolygonWkb(new double[][][][] {
+                        {
+                                {{2600000.0, 1200000.0}, {2600010.0, 1200000.0}, {2600010.0, 1200010.0}, {2600000.0, 1200010.0}, {2600000.0, 1200000.0}}
+                        },
+                        {
+                                {{2600020.0, 1200020.0}, {2600030.0, 1200020.0}, {2600030.0, 1200030.0}, {2600020.0, 1200030.0}, {2600020.0, 1200020.0}}
+                        }
+                }));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for multipolygon roundtrip");
+                try {
+                    byte[] wkb = api.rowGetGeometry(fetched);
+                    require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for multipolygon");
+                    require(wkbType(wkb) == 6, "unexpected WKB type for multipolygon rowGetGeometry: " + wkbType(wkb));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runCompoundcurveGeometryRoundtrip(OpenFgdb api, long db) throws Exception {
+        long table = api.openTable(db, "t_compoundcurve");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 15);
+                api.setGeometry(row, compoundCurveWkb(new double[][][] {
+                        {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}, {2600004.0, 1200002.0}}
+                }));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for compoundcurve roundtrip");
+                try {
+                    byte[] wkb = api.rowGetGeometry(fetched);
+                    require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for compoundcurve");
+                    require(wkbType(wkb) == 9, "unexpected WKB type for compoundcurve rowGetGeometry: " + wkbType(wkb));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runMulticurveGeometryRoundtrip(OpenFgdb api, long db) throws Exception {
+        long table = api.openTable(db, "t_multicurve");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 16);
+                api.setGeometry(row, multiCurveWkb(new byte[][] {
+                        compoundCurveWkb(new double[][][] {
+                                {{2600000.0, 1200000.0}, {2600001.0, 1200001.0}, {2600002.0, 1200002.0}}
+                        }),
+                        lineStringWkb(new double[][] {{2600010.0, 1200010.0}, {2600012.0, 1200011.0}})
+                }));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for multicurve roundtrip");
+                try {
+                    byte[] wkb = api.rowGetGeometry(fetched);
+                    require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for multicurve");
+                    require(wkbType(wkb) == 11, "unexpected WKB type for multicurve rowGetGeometry: " + wkbType(wkb));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runCurvepolygonGeometryRoundtrip(OpenFgdb api, long db) throws Exception {
+        long table = api.openTable(db, "t_curvepolygon");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 17);
+                api.setGeometry(row, curvePolygonWkb(new byte[][] {
+                        lineStringWkb(new double[][] {
+                                {2600000.0, 1200000.0},
+                                {2600010.0, 1200000.0},
+                                {2600010.0, 1200010.0},
+                                {2600000.0, 1200010.0},
+                                {2600000.0, 1200000.0}
+                        })
+                }));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for curvepolygon roundtrip");
+                try {
+                    byte[] wkb = api.rowGetGeometry(fetched);
+                    require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for curvepolygon");
+                    require(wkbType(wkb) == 10, "unexpected WKB type for curvepolygon rowGetGeometry: " + wkbType(wkb));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runMultisurfaceGeometryRoundtrip(OpenFgdb api, long db) throws Exception {
+        long table = api.openTable(db, "t_multisurface");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 18);
+                api.setGeometry(row, multiSurfaceWkb(new byte[][] {
+                        curvePolygonWkb(new byte[][] {
+                                lineStringWkb(new double[][] {
+                                        {2600000.0, 1200000.0},
+                                        {2600010.0, 1200000.0},
+                                        {2600010.0, 1200010.0},
+                                        {2600000.0, 1200010.0},
+                                        {2600000.0, 1200000.0}
+                                })
+                        })
+                }));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for multisurface roundtrip");
+                try {
+                    byte[] wkb = api.rowGetGeometry(fetched);
+                    require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for multisurface");
+                    require(wkbType(wkb) == 12, "unexpected WKB type for multisurface rowGetGeometry: " + wkbType(wkb));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+    }
+
+    private static void runStrictMismatchChecks(OpenFgdb api, long db) throws Exception {
+        assertSetGeometryRejects(api, db, "t_line", multiLineStringWkb(new double[][][] {{{2600000.0, 1200000.0}, {2600002.0, 1200001.0}}}),
+                "expected LINE", "got MULTILINE");
+        assertSetGeometryRejects(api, db, "t_multiline", lineStringWkb(new double[][] {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}}),
+                "expected MULTILINE", "got LINE");
+        assertSetGeometryRejects(api, db, "t_polygon", multiPolygonWkb(new double[][][][] {
+                {
+                        {{2600000.0, 1200000.0}, {2600010.0, 1200000.0}, {2600010.0, 1200010.0}, {2600000.0, 1200010.0}, {2600000.0, 1200000.0}}
+                }
+        }), "expected POLYGON", "got MULTIPOLYGON");
+        assertSetGeometryRejects(api, db, "t_multipolygon", polygonWkb(new double[][][] {
+                {{2600000.0, 1200000.0}, {2600010.0, 1200000.0}, {2600010.0, 1200010.0}, {2600000.0, 1200010.0}, {2600000.0, 1200000.0}}
+        }), "expected MULTIPOLYGON", "got POLYGON");
+        assertSetGeometryRejects(api, db, "t_line", compoundCurveWkb(new double[][][] {
+                {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}, {2600004.0, 1200002.0}}
+        }), "expected LINE", "got COMPOUNDCURVE");
+        assertSetGeometryRejects(api, db, "t_compoundcurve", lineStringWkb(new double[][] {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}}),
+                "expected COMPOUNDCURVE", "got LINE");
+        assertSetGeometryRejects(api, db, "t_polygon", curvePolygonWkb(new byte[][] {
+                lineStringWkb(new double[][] {
+                        {2600000.0, 1200000.0},
+                        {2600010.0, 1200000.0},
+                        {2600010.0, 1200010.0},
+                        {2600000.0, 1200010.0},
+                        {2600000.0, 1200000.0}
+                })
+        }), "expected POLYGON", "got CURVEPOLYGON");
+        assertSetGeometryRejects(api, db, "t_curvepolygon", polygonWkb(new double[][][] {
+                {{2600000.0, 1200000.0}, {2600010.0, 1200000.0}, {2600010.0, 1200010.0}, {2600000.0, 1200010.0}, {2600000.0, 1200000.0}}
+        }), "expected CURVEPOLYGON", "got POLYGON");
+    }
+
+    private static void assertSetGeometryRejects(OpenFgdb api, long db, String tableName, byte[] wkb, String expected, String got)
+            throws Exception {
+        long table = api.openTable(db, tableName);
+        try {
+            long row = api.createRow(table);
+            try {
+                try {
+                    api.setGeometry(row, wkb);
+                    throw new IllegalStateException("Expected OpenFgdbException for geometry type mismatch in " + tableName);
+                } catch (OpenFgdbException ex) {
+                    require(ex.getErrorCode() == OpenFgdb.OFGDB_ERR_INVALID_ARG,
+                            "Expected OFGDB_ERR_INVALID_ARG for " + tableName + " but got " + ex.getErrorCode());
+                    require(ex.getMessage().contains(expected), "Missing expected token in message: " + ex.getMessage());
+                    require(ex.getMessage().contains(got), "Missing actual token in message: " + ex.getMessage());
+                }
+            } finally {
+                api.closeRow(row);
             }
         } finally {
             api.closeTable(db, table);
@@ -174,6 +503,174 @@ public final class OpenFgdbCiSmokeMain {
         buffer.putDouble(x);
         buffer.putDouble(y);
         return buffer.array();
+    }
+
+    private static byte[] multiPointWkb(double[][] points) {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 4 + points.length * (1 + 4 + 8 + 8)).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(4);
+        buffer.putInt(points.length);
+        for (double[] point : points) {
+            buffer.put((byte) 1);
+            buffer.putInt(1);
+            buffer.putDouble(point[0]);
+            buffer.putDouble(point[1]);
+        }
+        return buffer.array();
+    }
+
+    private static byte[] lineStringWkb(double[][] points) {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 4 + points.length * 16).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(2);
+        buffer.putInt(points.length);
+        for (double[] point : points) {
+            buffer.putDouble(point[0]);
+            buffer.putDouble(point[1]);
+        }
+        return buffer.array();
+    }
+
+    private static byte[] multiLineStringWkb(double[][][] lines) {
+        int size = 1 + 4 + 4;
+        for (double[][] line : lines) {
+            size += 1 + 4 + 4 + line.length * 16;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(5);
+        buffer.putInt(lines.length);
+        for (double[][] line : lines) {
+            buffer.put((byte) 1);
+            buffer.putInt(2);
+            buffer.putInt(line.length);
+            for (double[] point : line) {
+                buffer.putDouble(point[0]);
+                buffer.putDouble(point[1]);
+            }
+        }
+        return buffer.array();
+    }
+
+    private static byte[] polygonWkb(double[][][] rings) {
+        int size = 1 + 4 + 4;
+        for (double[][] ring : rings) {
+            size += 4 + ring.length * 16;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(3);
+        buffer.putInt(rings.length);
+        for (double[][] ring : rings) {
+            buffer.putInt(ring.length);
+            for (double[] point : ring) {
+                buffer.putDouble(point[0]);
+                buffer.putDouble(point[1]);
+            }
+        }
+        return buffer.array();
+    }
+
+    private static byte[] multiPolygonWkb(double[][][][] polygons) {
+        int size = 1 + 4 + 4;
+        for (double[][][] polygon : polygons) {
+            size += 1 + 4 + 4;
+            for (double[][] ring : polygon) {
+                size += 4 + ring.length * 16;
+            }
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(6);
+        buffer.putInt(polygons.length);
+        for (double[][][] polygon : polygons) {
+            buffer.put((byte) 1);
+            buffer.putInt(3);
+            buffer.putInt(polygon.length);
+            for (double[][] ring : polygon) {
+                buffer.putInt(ring.length);
+                for (double[] point : ring) {
+                    buffer.putDouble(point[0]);
+                    buffer.putDouble(point[1]);
+                }
+            }
+        }
+        return buffer.array();
+    }
+
+    private static byte[] compoundCurveWkb(double[][][] curves) {
+        int size = 1 + 4 + 4;
+        byte[][] curveWkbs = new byte[curves.length][];
+        for (int i = 0; i < curves.length; i++) {
+            curveWkbs[i] = lineStringWkb(curves[i]);
+            size += curveWkbs[i].length;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(9);
+        buffer.putInt(curves.length);
+        for (byte[] curveWkb : curveWkbs) {
+            buffer.put(curveWkb);
+        }
+        return buffer.array();
+    }
+
+    private static byte[] multiCurveWkb(byte[][] curves) {
+        int size = 1 + 4 + 4;
+        for (byte[] curve : curves) {
+            size += curve.length;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(11);
+        buffer.putInt(curves.length);
+        for (byte[] curve : curves) {
+            buffer.put(curve);
+        }
+        return buffer.array();
+    }
+
+    private static byte[] curvePolygonWkb(byte[][] rings) {
+        int size = 1 + 4 + 4;
+        for (byte[] ring : rings) {
+            size += ring.length;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(10);
+        buffer.putInt(rings.length);
+        for (byte[] ring : rings) {
+            buffer.put(ring);
+        }
+        return buffer.array();
+    }
+
+    private static byte[] multiSurfaceWkb(byte[][] surfaces) {
+        int size = 1 + 4 + 4;
+        for (byte[] surface : surfaces) {
+            size += surface.length;
+        }
+        ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(12);
+        buffer.putInt(surfaces.length);
+        for (byte[] surface : surfaces) {
+            buffer.put(surface);
+        }
+        return buffer.array();
+    }
+
+    private static int wkbType(byte[] wkb) {
+        if (wkb == null || wkb.length < 5) {
+            return -1;
+        }
+        ByteOrder order;
+        if (wkb[0] == 0) {
+            order = ByteOrder.BIG_ENDIAN;
+        } else {
+            order = ByteOrder.LITTLE_ENDIAN;
+        }
+        return ByteBuffer.wrap(wkb, 1, 4).order(order).getInt();
     }
 
     private static void require(boolean condition, String message) {
