@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Base64;
 import java.util.List;
 
 import org.junit.Assume;
@@ -600,6 +601,192 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void geometryContractSurvivesReopenLine() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Path dbDir = Files.createTempDirectory("openfgdb4j-reopen-line-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_reopen_line(id INTEGER, geom_decl OFGDB_GEOMETRY(LINE,2056,2) NOT NULL)");
+            long table = api.openTable(dbCreate, "t_reopen_line");
+            try {
+                long row = api.createRow(table);
+                try {
+                    api.setInt32(row, "id", 1);
+                    api.setGeometry(row, lineStringWkb(new double[][] {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}}));
+                    api.insert(table, row);
+                } finally {
+                    api.closeRow(row);
+                }
+            } finally {
+                api.closeTable(dbCreate, table);
+            }
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            long table = api.openTable(dbOpen, "t_reopen_line");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    try {
+                        assertEquals(Integer.valueOf(1), api.rowGetInt32(fetched, "id"));
+                        assertFalse(api.rowIsNull(fetched, "geom_decl"));
+                        byte[] blobView = api.rowGetBlob(fetched, "geom_decl");
+                        assertTrue(blobView != null && blobView.length > 0);
+                        assertEquals(2, wkbType(blobView));
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(dbOpen, table);
+            }
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
+    public void geometryContractSurvivesReopenCurvepolygon() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-reopen-curvepolygon-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_reopen_curvepolygon(id INTEGER, geom_decl OFGDB_GEOMETRY(CURVEPOLYGON,2056,2) NOT NULL)");
+            long table = api.openTable(dbCreate, "t_reopen_curvepolygon");
+            try {
+                long row = api.createRow(table);
+                try {
+                    api.setInt32(row, "id", 1);
+                    api.setGeometry(row, curvePolygonWkb(new byte[][] {
+                            lineStringWkb(new double[][] {
+                                    {2600000.0, 1200000.0},
+                                    {2600010.0, 1200000.0},
+                                    {2600010.0, 1200010.0},
+                                    {2600000.0, 1200010.0},
+                                    {2600000.0, 1200000.0}
+                            })
+                    }));
+                    api.insert(table, row);
+                } finally {
+                    api.closeRow(row);
+                }
+            } finally {
+                api.closeTable(dbCreate, table);
+            }
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            long table = api.openTable(dbOpen, "t_reopen_curvepolygon");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    try {
+                        assertEquals(Integer.valueOf(1), api.rowGetInt32(fetched, "id"));
+                        assertFalse(api.rowIsNull(fetched, "geom_decl"));
+                        byte[] blobView = api.rowGetBlob(fetched, "geom_decl");
+                        assertTrue(blobView != null && blobView.length > 0);
+                        assertEquals(10, wkbType(blobView));
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(dbOpen, table);
+            }
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
+    public void insertByDeclaredGeometryColumnNameWorks() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Path dbDir = Files.createTempDirectory("openfgdb4j-declared-insert-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_declared_insert(id INTEGER, geom_decl OFGDB_GEOMETRY(POINT,2056,2) NOT NULL)");
+            String literal = toByteLiteral(pointWkb(2600000.5, 1200000.25));
+            api.execSql(db, "INSERT INTO t_declared_insert(id, geom_decl) VALUES (1, '" + literal + "')");
+
+            long table = api.openTable(db, "t_declared_insert");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    try {
+                        assertEquals(Integer.valueOf(1), api.rowGetInt32(fetched, "id"));
+                        byte[] blobView = api.rowGetBlob(fetched, "geom_decl");
+                        assertTrue(blobView != null && blobView.length > 0);
+                        assertEquals(1, wkbType(blobView));
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void readByDeclaredGeometryColumnNameWorks() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Path dbDir = Files.createTempDirectory("openfgdb4j-declared-read-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_declared_read(id INTEGER, geom_decl OFGDB_GEOMETRY(POINT,2056,2) NOT NULL)");
+            long table = api.openTable(db, "t_declared_read");
+            try {
+                long row = api.createRow(table);
+                try {
+                    api.setInt32(row, "id", 1);
+                    api.setGeometry(row, pointWkb(2600000.5, 1200000.25));
+                    api.insert(table, row);
+                } finally {
+                    api.closeRow(row);
+                }
+
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    try {
+                        assertEquals(Integer.valueOf(1), api.rowGetInt32(fetched, "id"));
+                        assertFalse(api.rowIsNull(fetched, "geom_decl"));
+                        byte[] blobView = api.rowGetBlob(fetched, "geom_decl");
+                        assertTrue(blobView != null && blobView.length > 0);
+                        assertEquals(1, wkbType(blobView));
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
     public void gdalFailureDoesNotFallback() throws Exception {
         Assume.assumeTrue("1".equals(System.getenv("OPENFGDB4J_GDAL_FORCE_FAIL")));
         OpenFgdb api = new OpenFgdb();
@@ -679,6 +866,10 @@ public class OpenFgdbSmokeTest {
 
     private static boolean isRealGdal(OpenFgdb api) throws Exception {
         return api.getRuntimeInfo().contains("impl=real_gdal");
+    }
+
+    private static String toByteLiteral(byte[] value) {
+        return "__OFGDB_BYTES_B64__:" + Base64.getEncoder().encodeToString(value);
     }
 
     private static byte[] pointWkb(double x, double y) {

@@ -86,6 +86,7 @@ public final class OpenFgdbCiSmokeMain {
                 runCurvepolygonGeometryRoundtrip(api, db);
                 runMultisurfaceGeometryRoundtrip(api, db);
                 runStrictMismatchChecks(api, db);
+                db = runDeclaredGeometryContractReopenRoundtrip(api, db, dbDir.toString());
             }
         } finally {
             api.close(db);
@@ -465,6 +466,47 @@ public final class OpenFgdbCiSmokeMain {
         } finally {
             api.closeTable(db, table);
         }
+    }
+
+    private static long runDeclaredGeometryContractReopenRoundtrip(OpenFgdb api, long db, String dbPath) throws Exception {
+        api.execSql(db, "CREATE TABLE t_declared_reopen(id INTEGER, geom_decl OFGDB_GEOMETRY(LINE,2056,2) NOT NULL)");
+        long table = api.openTable(db, "t_declared_reopen");
+        try {
+            long row = api.createRow(table);
+            try {
+                api.setInt32(row, "id", 21);
+                api.setGeometry(row, lineStringWkb(new double[][] {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}}));
+                api.insert(table, row);
+            } finally {
+                api.closeRow(row);
+            }
+        } finally {
+            api.closeTable(db, table);
+        }
+
+        api.close(db);
+        long reopenedDb = api.open(dbPath);
+        long reopenedTable = api.openTable(reopenedDb, "t_declared_reopen");
+        try {
+            long cursor = api.search(reopenedTable, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for declared geometry reopen roundtrip");
+                try {
+                    require(!api.rowIsNull(fetched, "geom_decl"), "declared geometry column unexpectedly null after reopen");
+                    byte[] blob = api.rowGetBlob(fetched, "geom_decl");
+                    require(blob != null && blob.length > 0, "declared geometry blob missing after reopen");
+                    require(wkbType(blob) == 2, "unexpected WKB type for declared geometry after reopen: " + wkbType(blob));
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(reopenedDb, reopenedTable);
+        }
+        return reopenedDb;
     }
 
     private static void runGdalFailScenario() throws IOException {
