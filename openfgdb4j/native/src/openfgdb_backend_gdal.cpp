@@ -568,20 +568,6 @@ bool is_multi_kind(GeometryContractKind kind) {
          kind == GeometryContractKind::kMultiSurface;
 }
 
-bool sql_curve_surface_crash_guard_enabled() {
-  const char* env_value = std::getenv("OPENFGDB4J_SQL_CURVE_SURFACE_GUARD");
-  if (env_value == nullptr || *env_value == '\0') {
-    return true;
-  }
-  return env_true(env_value);
-}
-
-bool is_sql_curve_surface_crash_guard_kind(GeometryContractKind kind) {
-  return kind == GeometryContractKind::kCircularString || kind == GeometryContractKind::kCompoundCurve ||
-         kind == GeometryContractKind::kMultiCurve || kind == GeometryContractKind::kCurvePolygon ||
-         kind == GeometryContractKind::kMultiSurface;
-}
-
 struct GeometrySqlColumnSpec {
   std::string name;
   GeometryContractKind contract_kind = GeometryContractKind::kUnknown;
@@ -3124,14 +3110,6 @@ class GdalBackend final : public OpenFgdbBackend {
     GeometryContractKind declared_kind = get_declared_geom_kind_for_table_column_locked(db, table_name, column_name.c_str());
     if (declared_kind == GeometryContractKind::kUnknown) {
       declared_kind = get_declared_geom_kind(feat, geom_idx);
-    }
-    if (sql_curve_surface_crash_guard_enabled() && is_sql_curve_surface_crash_guard_kind(declared_kind)) {
-      OGR_G_DestroyGeometry(geom);
-      if (out_error != nullptr) {
-        *out_error =
-            "curve surface insert via SQL is blocked by OPENFGDB4J_SQL_CURVE_SURFACE_GUARD to avoid native OpenFileGDB crash";
-      }
-      return false;
     }
     std::string geometry_error;
     if (!check_geometry_contract_kind(declared_kind, geom, &geometry_error)) {
