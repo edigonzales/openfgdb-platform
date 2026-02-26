@@ -414,12 +414,16 @@ public class OpenFgdbSmokeTest {
                 try {
                     api.setInt32(row, "id", 77);
                     api.setGeometry(row, curvePolygonWkb(new byte[][] {
-                            lineStringWkb(new double[][] {
-                                    {2600000.0, 1200000.0},
-                                    {2600010.0, 1200000.0},
-                                    {2600010.0, 1200010.0},
-                                    {2600000.0, 1200010.0},
-                                    {2600000.0, 1200000.0}
+                            compoundCurveWkbFromComponents(new byte[][] {
+                                    circularStringWkb(new double[][] {
+                                            {2600000.0, 1200000.0},
+                                            {2600002.0, 1200002.0},
+                                            {2600004.0, 1200000.0}
+                                    }),
+                                    lineStringWkb(new double[][] {
+                                            {2600004.0, 1200000.0},
+                                            {2600000.0, 1200000.0}
+                                    })
                             })
                     }));
                     api.insert(table, row);
@@ -435,9 +439,19 @@ public class OpenFgdbSmokeTest {
                         byte[] geom = api.rowGetGeometry(fetched);
                         assertTrue(geom != null && geom.length > 0);
                         assertEquals(10, wkbType(geom));
+                        assertWkbContainsExpectedCoords(geom, new double[][] {
+                                {2600000.0, 1200000.0},
+                                {2600002.0, 1200002.0},
+                                {2600004.0, 1200000.0}
+                        });
                         byte[] blobView = api.rowGetBlob(fetched, "shape");
                         assertTrue(blobView != null && blobView.length > 0);
                         assertEquals(10, wkbType(blobView));
+                        assertWkbContainsExpectedCoords(blobView, new double[][] {
+                                {2600000.0, 1200000.0},
+                                {2600002.0, 1200002.0},
+                                {2600004.0, 1200000.0}
+                        });
                     } finally {
                         api.closeRow(fetched);
                     }
@@ -467,12 +481,16 @@ public class OpenFgdbSmokeTest {
                     api.setInt32(row, "id", 88);
                     api.setGeometry(row, multiSurfaceWkb(new byte[][] {
                             curvePolygonWkb(new byte[][] {
-                                    lineStringWkb(new double[][] {
-                                            {2600000.0, 1200000.0},
-                                            {2600010.0, 1200000.0},
-                                            {2600010.0, 1200010.0},
-                                            {2600000.0, 1200010.0},
-                                            {2600000.0, 1200000.0}
+                                    compoundCurveWkbFromComponents(new byte[][] {
+                                            circularStringWkb(new double[][] {
+                                                    {2600000.0, 1200000.0},
+                                                    {2600002.0, 1200002.0},
+                                                    {2600004.0, 1200000.0}
+                                            }),
+                                            lineStringWkb(new double[][] {
+                                                    {2600004.0, 1200000.0},
+                                                    {2600000.0, 1200000.0}
+                                            })
                                     })
                             })
                     }));
@@ -489,9 +507,19 @@ public class OpenFgdbSmokeTest {
                         byte[] geom = api.rowGetGeometry(fetched);
                         assertTrue(geom != null && geom.length > 0);
                         assertEquals(12, wkbType(geom));
+                        assertWkbContainsExpectedCoords(geom, new double[][] {
+                                {2600000.0, 1200000.0},
+                                {2600002.0, 1200002.0},
+                                {2600004.0, 1200000.0}
+                        });
                         byte[] blobView = api.rowGetBlob(fetched, "shape");
                         assertTrue(blobView != null && blobView.length > 0);
                         assertEquals(12, wkbType(blobView));
+                        assertWkbContainsExpectedCoords(blobView, new double[][] {
+                                {2600000.0, 1200000.0},
+                                {2600002.0, 1200002.0},
+                                {2600004.0, 1200000.0}
+                        });
                     } finally {
                         api.closeRow(fetched);
                     }
@@ -673,12 +701,16 @@ public class OpenFgdbSmokeTest {
                 try {
                     api.setInt32(row, "id", 1);
                     api.setGeometry(row, curvePolygonWkb(new byte[][] {
-                            lineStringWkb(new double[][] {
-                                    {2600000.0, 1200000.0},
-                                    {2600010.0, 1200000.0},
-                                    {2600010.0, 1200010.0},
-                                    {2600000.0, 1200010.0},
-                                    {2600000.0, 1200000.0}
+                            compoundCurveWkbFromComponents(new byte[][] {
+                                    circularStringWkb(new double[][] {
+                                            {2600000.0, 1200000.0},
+                                            {2600002.0, 1200002.0},
+                                            {2600004.0, 1200000.0}
+                                    }),
+                                    lineStringWkb(new double[][] {
+                                            {2600004.0, 1200000.0},
+                                            {2600000.0, 1200000.0}
+                                    })
                             })
                     }));
                     api.insert(table, row);
@@ -705,6 +737,11 @@ public class OpenFgdbSmokeTest {
                         byte[] blobView = api.rowGetBlob(fetched, "geom_decl");
                         assertTrue(blobView != null && blobView.length > 0);
                         assertEquals(10, wkbType(blobView));
+                        assertWkbContainsExpectedCoords(blobView, new double[][] {
+                                {2600000.0, 1200000.0},
+                                {2600002.0, 1200002.0},
+                                {2600004.0, 1200000.0}
+                        });
                     } finally {
                         api.closeRow(fetched);
                     }
@@ -1123,6 +1160,29 @@ public class OpenFgdbSmokeTest {
             buffer.put(surface);
         }
         return buffer.array();
+    }
+
+    private static boolean containsCoordinatePairLe(byte[] wkb, double x, double y) {
+        if (wkb == null || wkb.length < 16) {
+            return false;
+        }
+        for (int i = 0; i <= wkb.length - 16; i++) {
+            double xi = ByteBuffer.wrap(wkb, i, 8).order(ByteOrder.LITTLE_ENDIAN).getDouble();
+            if (Math.abs(xi - x) > 1e-9) {
+                continue;
+            }
+            double yi = ByteBuffer.wrap(wkb, i + 8, 8).order(ByteOrder.LITTLE_ENDIAN).getDouble();
+            if (Math.abs(yi - y) <= 1e-9) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void assertWkbContainsExpectedCoords(byte[] wkb, double[][] coords) {
+        for (double[] coord : coords) {
+            assertTrue("missing coordinate pair " + coord[0] + "," + coord[1], containsCoordinatePairLe(wkb, coord[0], coord[1]));
+        }
     }
 
     private static int wkbType(byte[] wkb) {

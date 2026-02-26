@@ -641,6 +641,74 @@ bool check_geometry_contract_kind(GeometryContractKind declared_kind, OGRGeometr
   return false;
 }
 
+OGRGeometryH clone_curve_ring_for_curvepolygon(OGRGeometryH ring, std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (ring == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "missing CURVEPOLYGON ring geometry";
+    }
+    return nullptr;
+  }
+  const char* ring_name_raw = OGR_G_GetGeometryName(ring);
+  std::string ring_name_upper = to_upper_copy(ring_name_raw != nullptr ? ring_name_raw : "");
+  if (ring_name_upper.rfind("LINEARRING", 0) == 0) {
+    OGRwkbGeometryType ring_type = OGR_G_GetGeometryType(ring);
+    OGRwkbGeometryType target_type = OGR_GT_HasZ(ring_type) ? wkbSetZ(wkbLineString) : wkbLineString;
+    OGRGeometryH as_line = OGR_G_CreateGeometry(target_type);
+    if (as_line == nullptr) {
+      if (out_error != nullptr) {
+        *out_error = "failed to allocate LINESTRING for LINEARRING conversion";
+      }
+      return nullptr;
+    }
+    int point_count = OGR_G_GetPointCount(ring);
+    for (int i = 0; i < point_count; i++) {
+      double x = OGR_G_GetX(ring, i);
+      double y = OGR_G_GetY(ring, i);
+      if (OGR_GT_HasZ(ring_type)) {
+        OGR_G_AddPoint(as_line, x, y, OGR_G_GetZ(ring, i));
+      } else {
+        OGR_G_AddPoint_2D(as_line, x, y);
+      }
+    }
+    return as_line;
+  }
+  if (ring_name_upper.rfind("CIRCULARSTRING", 0) == 0 || ring_name_upper.rfind("COMPOUNDCURVE", 0) == 0 ||
+      ring_name_upper == "CURVE" || ring_name_upper.rfind("CURVEPOLYGON", 0) == 0) {
+    OGRGeometryH clone = OGR_G_Clone(ring);
+    if (clone == nullptr && out_error != nullptr) {
+      *out_error = "failed to clone curve ring geometry";
+    }
+    return clone;
+  }
+  if (ring_name_upper.rfind("MULTILINESTRING", 0) == 0 || ring_name_upper.rfind("MULTICURVE", 0) == 0) {
+    int part_count = OGR_G_GetGeometryCount(ring);
+    if (part_count != 1) {
+      if (out_error != nullptr) {
+        *out_error = "unsupported CURVEPOLYGON ring collection with ";
+        *out_error += std::to_string(part_count);
+        *out_error += " parts";
+      }
+      return nullptr;
+    }
+    OGRGeometryH single_part = OGR_G_GetGeometryRef(ring, 0);
+    if (single_part == nullptr) {
+      if (out_error != nullptr) {
+        *out_error = "failed to access single ring part";
+      }
+      return nullptr;
+    }
+    return clone_curve_ring_for_curvepolygon(single_part, out_error);
+  }
+  OGRGeometryH clone = OGR_G_Clone(ring);
+  if (clone == nullptr && out_error != nullptr) {
+    *out_error = "failed to clone CURVEPOLYGON ring geometry";
+  }
+  return clone;
+}
+
 OGRGeometryH curvepolygon_from_polygon_like(OGRGeometryH polygon_like, std::string* out_error) {
   if (out_error != nullptr) {
     out_error->clear();
@@ -650,6 +718,15 @@ OGRGeometryH curvepolygon_from_polygon_like(OGRGeometryH polygon_like, std::stri
       *out_error = "missing polygon geometry";
     }
     return nullptr;
+  }
+  const char* source_name = OGR_G_GetGeometryName(polygon_like);
+  std::string source_name_upper = to_upper_copy(source_name != nullptr ? source_name : "");
+  if (source_name_upper.rfind("CURVEPOLYGON", 0) == 0) {
+    OGRGeometryH clone = OGR_G_Clone(polygon_like);
+    if (clone == nullptr && out_error != nullptr) {
+      *out_error = "failed to clone CURVEPOLYGON geometry";
+    }
+    return clone;
   }
   OGRwkbGeometryType source_type = OGR_G_GetGeometryType(polygon_like);
   OGRwkbGeometryType target_type = OGR_GT_HasZ(source_type) ? wkbSetZ(wkbCurvePolygon) : wkbCurvePolygon;
@@ -666,37 +743,43 @@ OGRGeometryH curvepolygon_from_polygon_like(OGRGeometryH polygon_like, std::stri
     if (ring == nullptr) {
       OGR_G_DestroyGeometry(curve_polygon);
       if (out_error != nullptr) {
-        *out_error = "failed to access polygon ring";
+        *out_error = "failed to access polygon ring (declared=CURVEPOLYGON, ring_index=" + std::to_string(i) + ")";
       }
       return nullptr;
     }
-    OGRwkbGeometryType ring_type = OGR_G_GetGeometryType(ring);
-    OGRwkbGeometryType ring_line_type = OGR_GT_HasZ(ring_type) ? wkbSetZ(wkbLineString) : wkbLineString;
-    OGRGeometryH ring_curve = OGR_G_CreateGeometry(ring_line_type);
+    std::string ring_error;
+    OGRGeometryH ring_curve = clone_curve_ring_for_curvepolygon(ring, &ring_error);
     if (ring_curve == nullptr) {
       OGR_G_DestroyGeometry(curve_polygon);
       if (out_error != nullptr) {
-        *out_error = "failed to allocate curve polygon ring";
+        *out_error = "failed to normalize CURVEPOLYGON ring (declared=CURVEPOLYGON, ring_index=" + std::to_string(i) +
+                     "): " + ring_error;
       }
       return nullptr;
-    }
-    int point_count = OGR_G_GetPointCount(ring);
-    for (int p = 0; p < point_count; p++) {
-      double x = OGR_G_GetX(ring, p);
-      double y = OGR_G_GetY(ring, p);
-      if (OGR_GT_HasZ(ring_type)) {
-        double z = OGR_G_GetZ(ring, p);
-        OGR_G_AddPoint(ring_curve, x, y, z);
-      } else {
-        OGR_G_AddPoint_2D(ring_curve, x, y);
-      }
     }
     OGRErr err = OGR_G_AddGeometry(curve_polygon, ring_curve);
     OGR_G_DestroyGeometry(ring_curve);
     if (err != OGRERR_NONE) {
+      // Some providers expose polygon rings as linear-ring specific types.
+      // Retry with GDAL's linear geometry conversion if direct add failed.
+      OGRGeometryH ring_linear = OGR_G_GetLinearGeometry(ring, 0.0, nullptr);
+      if (ring_linear != nullptr) {
+        OGRErr linear_err = OGR_G_AddGeometry(curve_polygon, ring_linear);
+        OGR_G_DestroyGeometry(ring_linear);
+        if (linear_err == OGRERR_NONE) {
+          continue;
+        }
+      }
       OGR_G_DestroyGeometry(curve_polygon);
       if (out_error != nullptr) {
-        *out_error = "failed to add ring to CURVEPOLYGON";
+        const char* ring_name = OGR_G_GetGeometryName(ring);
+        const char* cpl_msg = CPLGetLastErrorMsg();
+        *out_error = "failed to add ring to CURVEPOLYGON (declared=CURVEPOLYGON, ring_index=" + std::to_string(i) +
+                     ", ring_type=" + std::string(ring_name != nullptr ? ring_name : "UNKNOWN") + ")";
+        if (cpl_msg != nullptr && std::strlen(cpl_msg) > 0) {
+          *out_error += ": ";
+          *out_error += cpl_msg;
+        }
       }
       return nullptr;
     }
@@ -891,7 +974,22 @@ OGRGeometryH promote_curve_geometry_for_read(GeometryContractKind declared_kind,
         }
         return nullptr;
       }
-      return curvepolygon_from_polygon_like(first_surface, out_error);
+      GeometryContractKind first_kind = map_ogr_geometry_to_contract_kind(OGR_G_GetGeometryType(first_surface));
+      if (first_kind == GeometryContractKind::kCurvePolygon) {
+        OGRGeometryH clone = OGR_G_Clone(first_surface);
+        if (clone == nullptr && out_error != nullptr) {
+          *out_error = "failed to clone CURVEPOLYGON surface";
+        }
+        return clone;
+      }
+      if (first_kind == GeometryContractKind::kPolygon) {
+        return curvepolygon_from_polygon_like(first_surface, out_error);
+      }
+      if (out_error != nullptr) {
+        *out_error = "geometry contract violation: expected CURVEPOLYGON surface, got ";
+        *out_error += geometry_contract_kind_name(first_kind);
+      }
+      return nullptr;
     }
   }
 
@@ -937,7 +1035,20 @@ OGRGeometryH promote_curve_geometry_for_read(GeometryContractKind declared_kind,
         }
         return nullptr;
       }
-      OGRGeometryH curve_polygon = curvepolygon_from_polygon_like(polygon_part, out_error);
+      GeometryContractKind part_kind = map_ogr_geometry_to_contract_kind(OGR_G_GetGeometryType(polygon_part));
+      OGRGeometryH curve_polygon = nullptr;
+      if (part_kind == GeometryContractKind::kCurvePolygon) {
+        curve_polygon = OGR_G_Clone(polygon_part);
+      } else if (part_kind == GeometryContractKind::kPolygon) {
+        curve_polygon = curvepolygon_from_polygon_like(polygon_part, out_error);
+      } else {
+        if (out_error != nullptr) {
+          *out_error = "geometry contract violation: expected MULTISURFACE part as CURVEPOLYGON/POLYGON, got ";
+          *out_error += geometry_contract_kind_name(part_kind);
+        }
+        OGR_G_DestroyGeometry(multi_surface);
+        return nullptr;
+      }
       if (curve_polygon == nullptr) {
         OGR_G_DestroyGeometry(multi_surface);
         return nullptr;

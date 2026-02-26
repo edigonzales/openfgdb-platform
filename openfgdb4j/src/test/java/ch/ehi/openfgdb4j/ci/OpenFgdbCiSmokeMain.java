@@ -348,12 +348,16 @@ public final class OpenFgdbCiSmokeMain {
             try {
                 api.setInt32(row, "id", 17);
                 api.setGeometry(row, curvePolygonWkb(new byte[][] {
-                        lineStringWkb(new double[][] {
-                                {2600000.0, 1200000.0},
-                                {2600010.0, 1200000.0},
-                                {2600010.0, 1200010.0},
-                                {2600000.0, 1200010.0},
-                                {2600000.0, 1200000.0}
+                        compoundCurveWkbFromComponents(new byte[][] {
+                                circularStringWkb(new double[][] {
+                                        {2600000.0, 1200000.0},
+                                        {2600002.0, 1200002.0},
+                                        {2600004.0, 1200000.0}
+                                }),
+                                lineStringWkb(new double[][] {
+                                        {2600004.0, 1200000.0},
+                                        {2600000.0, 1200000.0}
+                                })
                         })
                 }));
                 api.insert(table, row);
@@ -369,6 +373,11 @@ public final class OpenFgdbCiSmokeMain {
                     byte[] wkb = api.rowGetGeometry(fetched);
                     require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for curvepolygon");
                     require(wkbType(wkb) == 10, "unexpected WKB type for curvepolygon rowGetGeometry: " + wkbType(wkb));
+                    assertWkbContainsExpectedCoords(wkb, new double[][] {
+                            {2600000.0, 1200000.0},
+                            {2600002.0, 1200002.0},
+                            {2600004.0, 1200000.0}
+                    });
                 } finally {
                     api.closeRow(fetched);
                 }
@@ -388,12 +397,16 @@ public final class OpenFgdbCiSmokeMain {
                 api.setInt32(row, "id", 18);
                 api.setGeometry(row, multiSurfaceWkb(new byte[][] {
                         curvePolygonWkb(new byte[][] {
-                                lineStringWkb(new double[][] {
-                                        {2600000.0, 1200000.0},
-                                        {2600010.0, 1200000.0},
-                                        {2600010.0, 1200010.0},
-                                        {2600000.0, 1200010.0},
-                                        {2600000.0, 1200000.0}
+                                compoundCurveWkbFromComponents(new byte[][] {
+                                        circularStringWkb(new double[][] {
+                                                {2600000.0, 1200000.0},
+                                                {2600002.0, 1200002.0},
+                                                {2600004.0, 1200000.0}
+                                        }),
+                                        lineStringWkb(new double[][] {
+                                                {2600004.0, 1200000.0},
+                                                {2600000.0, 1200000.0}
+                                        })
                                 })
                         })
                 }));
@@ -410,6 +423,11 @@ public final class OpenFgdbCiSmokeMain {
                     byte[] wkb = api.rowGetGeometry(fetched);
                     require(wkb != null && wkb.length > 0, "rowGetGeometry returned empty value for multisurface");
                     require(wkbType(wkb) == 12, "unexpected WKB type for multisurface rowGetGeometry: " + wkbType(wkb));
+                    assertWkbContainsExpectedCoords(wkb, new double[][] {
+                            {2600000.0, 1200000.0},
+                            {2600002.0, 1200002.0},
+                            {2600004.0, 1200000.0}
+                    });
                 } finally {
                     api.closeRow(fetched);
                 }
@@ -726,6 +744,30 @@ public final class OpenFgdbCiSmokeMain {
             buffer.put(surface);
         }
         return buffer.array();
+    }
+
+    private static boolean containsCoordinatePairLe(byte[] wkb, double x, double y) {
+        if (wkb == null || wkb.length < 16) {
+            return false;
+        }
+        for (int i = 0; i <= wkb.length - 16; i++) {
+            double xi = ByteBuffer.wrap(wkb, i, 8).order(ByteOrder.LITTLE_ENDIAN).getDouble();
+            if (Math.abs(xi - x) > 1e-9) {
+                continue;
+            }
+            double yi = ByteBuffer.wrap(wkb, i + 8, 8).order(ByteOrder.LITTLE_ENDIAN).getDouble();
+            if (Math.abs(yi - y) <= 1e-9) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static void assertWkbContainsExpectedCoords(byte[] wkb, double[][] coords) {
+        for (double[] coord : coords) {
+            require(containsCoordinatePairLe(wkb, coord[0], coord[1]),
+                    "missing coordinate pair " + coord[0] + "," + coord[1]);
+        }
     }
 
     private static int wkbType(byte[] wkb) {
