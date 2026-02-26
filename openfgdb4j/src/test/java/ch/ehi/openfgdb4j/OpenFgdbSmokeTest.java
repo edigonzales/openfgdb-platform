@@ -310,8 +310,16 @@ public class OpenFgdbSmokeTest {
                 long row = api.createRow(table);
                 try {
                     api.setInt32(row, "id", 55);
-                    api.setGeometry(row, compoundCurveWkb(new double[][][] {
-                            {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}, {2600004.0, 1200002.0}}
+                    api.setGeometry(row, compoundCurveWkbFromComponents(new byte[][] {
+                            circularStringWkb(new double[][] {
+                                    {2600000.0, 1200000.0},
+                                    {2600002.0, 1200001.0},
+                                    {2600004.0, 1200002.0}
+                            }),
+                            lineStringWkb(new double[][] {
+                                    {2600004.0, 1200002.0},
+                                    {2600006.0, 1200003.0}
+                            })
                     }));
                     api.insert(table, row);
                 } finally {
@@ -712,6 +720,69 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void geometryContractSurvivesReopenCompoundcurve() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-reopen-compoundcurve-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate,
+                    "CREATE TABLE t_reopen_compoundcurve(id INTEGER, geom_decl OFGDB_GEOMETRY(COMPOUNDCURVE,2056,2) NOT NULL)");
+            long table = api.openTable(dbCreate, "t_reopen_compoundcurve");
+            try {
+                long row = api.createRow(table);
+                try {
+                    api.setInt32(row, "id", 1);
+                    api.setGeometry(row, compoundCurveWkbFromComponents(new byte[][] {
+                            circularStringWkb(new double[][] {
+                                    {2600000.0, 1200000.0},
+                                    {2600002.0, 1200001.0},
+                                    {2600004.0, 1200002.0}
+                            }),
+                            lineStringWkb(new double[][] {
+                                    {2600004.0, 1200002.0},
+                                    {2600006.0, 1200003.0}
+                            })
+                    }));
+                    api.insert(table, row);
+                } finally {
+                    api.closeRow(row);
+                }
+            } finally {
+                api.closeTable(dbCreate, table);
+            }
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            long table = api.openTable(dbOpen, "t_reopen_compoundcurve");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    try {
+                        assertEquals(Integer.valueOf(1), api.rowGetInt32(fetched, "id"));
+                        assertFalse(api.rowIsNull(fetched, "geom_decl"));
+                        byte[] blobView = api.rowGetBlob(fetched, "geom_decl");
+                        assertTrue(blobView != null && blobView.length > 0);
+                        assertEquals(9, wkbType(blobView));
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(dbOpen, table);
+            }
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
     public void insertByDeclaredGeometryColumnNameWorks() throws Exception {
         OpenFgdb api = new OpenFgdb();
         Path dbDir = Files.createTempDirectory("openfgdb4j-declared-insert-").resolve("test.gdb");
@@ -974,19 +1045,37 @@ public class OpenFgdbSmokeTest {
         return buffer.array();
     }
 
+    private static byte[] circularStringWkb(double[][] points) {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 4 + points.length * 16).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(8);
+        buffer.putInt(points.length);
+        for (double[] point : points) {
+            buffer.putDouble(point[0]);
+            buffer.putDouble(point[1]);
+        }
+        return buffer.array();
+    }
+
     private static byte[] compoundCurveWkb(double[][][] curves) {
-        int size = 1 + 4 + 4;
         byte[][] curveWkbs = new byte[curves.length][];
         for (int i = 0; i < curves.length; i++) {
             curveWkbs[i] = lineStringWkb(curves[i]);
-            size += curveWkbs[i].length;
+        }
+        return compoundCurveWkbFromComponents(curveWkbs);
+    }
+
+    private static byte[] compoundCurveWkbFromComponents(byte[][] components) {
+        int size = 1 + 4 + 4;
+        for (byte[] component : components) {
+            size += component.length;
         }
         ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
         buffer.put((byte) 1);
         buffer.putInt(9);
-        buffer.putInt(curves.length);
-        for (byte[] curveWkb : curveWkbs) {
-            buffer.put(curveWkb);
+        buffer.putInt(components.length);
+        for (byte[] component : components) {
+            buffer.put(component);
         }
         return buffer.array();
     }

@@ -270,8 +270,16 @@ public final class OpenFgdbCiSmokeMain {
             long row = api.createRow(table);
             try {
                 api.setInt32(row, "id", 15);
-                api.setGeometry(row, compoundCurveWkb(new double[][][] {
-                        {{2600000.0, 1200000.0}, {2600002.0, 1200001.0}, {2600004.0, 1200002.0}}
+                api.setGeometry(row, compoundCurveWkbFromComponents(new byte[][] {
+                        circularStringWkb(new double[][] {
+                                {2600000.0, 1200000.0},
+                                {2600002.0, 1200001.0},
+                                {2600004.0, 1200002.0}
+                        }),
+                        lineStringWkb(new double[][] {
+                                {2600004.0, 1200002.0},
+                                {2600006.0, 1200003.0}
+                        })
                 }));
                 api.insert(table, row);
             } finally {
@@ -640,19 +648,37 @@ public final class OpenFgdbCiSmokeMain {
         return buffer.array();
     }
 
+    private static byte[] circularStringWkb(double[][] points) {
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + 4 + points.length * 16).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.put((byte) 1);
+        buffer.putInt(8);
+        buffer.putInt(points.length);
+        for (double[] point : points) {
+            buffer.putDouble(point[0]);
+            buffer.putDouble(point[1]);
+        }
+        return buffer.array();
+    }
+
     private static byte[] compoundCurveWkb(double[][][] curves) {
-        int size = 1 + 4 + 4;
         byte[][] curveWkbs = new byte[curves.length][];
         for (int i = 0; i < curves.length; i++) {
             curveWkbs[i] = lineStringWkb(curves[i]);
-            size += curveWkbs[i].length;
+        }
+        return compoundCurveWkbFromComponents(curveWkbs);
+    }
+
+    private static byte[] compoundCurveWkbFromComponents(byte[][] components) {
+        int size = 1 + 4 + 4;
+        for (byte[] component : components) {
+            size += component.length;
         }
         ByteBuffer buffer = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN);
         buffer.put((byte) 1);
         buffer.putInt(9);
-        buffer.putInt(curves.length);
-        for (byte[] curveWkb : curveWkbs) {
-            buffer.put(curveWkb);
+        buffer.putInt(components.length);
+        for (byte[] component : components) {
+            buffer.put(component);
         }
         return buffer.array();
     }

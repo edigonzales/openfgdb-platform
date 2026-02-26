@@ -262,37 +262,6 @@ bool starts_with_ci(const std::string& text, const char* prefix) {
   return norm_text.rfind(norm_prefix, 0) == 0;
 }
 
-bool sigsegv_trace_enabled() {
-  static bool enabled = env_true(std::getenv("OPENFGDB4J_SIGSEGV_TRACE"));
-  return enabled;
-}
-
-std::string shorten_for_trace(const std::string& text, size_t max_len = 512) {
-  if (text.size() <= max_len) {
-    return text;
-  }
-  if (max_len < 8) {
-    return text.substr(0, max_len);
-  }
-  return text.substr(0, max_len - 3) + "...";
-}
-
-void sigtrace(const std::string& message) {
-  if (!sigsegv_trace_enabled()) {
-    return;
-  }
-  std::ostringstream line;
-  line << "tid=" << std::this_thread::get_id() << " " << message;
-  std::fprintf(stderr, "[openfgdb4j-sigtrace] %s\n", line.str().c_str());
-  std::fflush(stderr);
-}
-
-std::string ptr_to_string(const void* ptr) {
-  std::ostringstream ss;
-  ss << ptr;
-  return ss.str();
-}
-
 int map_ogr_error(OGRErr err) {
   if (err == OGRERR_NONE) {
     return OFGDB_OK;
@@ -746,7 +715,8 @@ OGRGeometryH promote_curve_geometry_for_read(GeometryContractKind declared_kind,
 
   if (declared_kind == GeometryContractKind::kCompoundCurve) {
     OGRGeometryH single_curve = geom;
-    if (actual_kind == GeometryContractKind::kMultiLine || actual_kind == GeometryContractKind::kMultiCurve) {
+    GeometryContractKind single_kind = actual_kind;
+    if (single_kind == GeometryContractKind::kMultiLine || single_kind == GeometryContractKind::kMultiCurve) {
       int part_count = OGR_G_GetGeometryCount(geom);
       if (part_count != 1) {
         if (out_error != nullptr) {
@@ -761,7 +731,50 @@ OGRGeometryH promote_curve_geometry_for_read(GeometryContractKind declared_kind,
         }
         return nullptr;
       }
+      single_kind = map_ogr_geometry_to_contract_kind(OGR_G_GetGeometryType(single_curve));
     }
+
+    // Defensive unwrap: a nested single-part MULTI* can still appear in some provider paths.
+    while (single_kind == GeometryContractKind::kMultiLine || single_kind == GeometryContractKind::kMultiCurve) {
+      int nested_count = OGR_G_GetGeometryCount(single_curve);
+      if (nested_count != 1) {
+        if (out_error != nullptr) {
+          *out_error = "geometry contract violation: expected COMPOUNDCURVE but got " +
+                       std::string(geometry_contract_kind_name(single_kind)) + " with " +
+                       std::to_string(nested_count) + " parts";
+        }
+        return nullptr;
+      }
+      OGRGeometryH nested_part = OGR_G_GetGeometryRef(single_curve, 0);
+      if (nested_part == nullptr) {
+        if (out_error != nullptr) {
+          *out_error = "geometry contract violation: missing nested curve part";
+        }
+        return nullptr;
+      }
+      single_curve = nested_part;
+      single_kind = map_ogr_geometry_to_contract_kind(OGR_G_GetGeometryType(single_curve));
+    }
+
+    if (single_kind == GeometryContractKind::kCompoundCurve) {
+      OGRGeometryH direct_clone = OGR_G_Clone(single_curve);
+      if (direct_clone == nullptr) {
+        if (out_error != nullptr) {
+          *out_error = "failed to clone COMPOUNDCURVE";
+        }
+        return nullptr;
+      }
+      return direct_clone;
+    }
+
+    if (single_kind != GeometryContractKind::kLine && single_kind != GeometryContractKind::kCircularString) {
+      if (out_error != nullptr) {
+        *out_error = "geometry contract violation: expected COMPOUNDCURVE, got " +
+                     std::string(geometry_contract_kind_name(single_kind));
+      }
+      return nullptr;
+    }
+
     OGRwkbGeometryType source_type = OGR_G_GetGeometryType(single_curve);
     OGRwkbGeometryType target_type = OGR_GT_HasZ(source_type) ? wkbSetZ(wkbCompoundCurve) : wkbCompoundCurve;
     OGRGeometryH compound_curve = OGR_G_CreateGeometry(target_type);
@@ -771,6 +784,7 @@ OGRGeometryH promote_curve_geometry_for_read(GeometryContractKind declared_kind,
       }
       return nullptr;
     }
+
     OGRGeometryH curve_clone = OGR_G_Clone(single_curve);
     if (curve_clone == nullptr) {
       OGR_G_DestroyGeometry(compound_curve);
@@ -784,7 +798,9 @@ OGRGeometryH promote_curve_geometry_for_read(GeometryContractKind declared_kind,
     if (err != OGRERR_NONE) {
       OGR_G_DestroyGeometry(compound_curve);
       if (out_error != nullptr) {
-        *out_error = "failed to build COMPOUNDCURVE geometry";
+        const char* geom_name = OGR_G_GetGeometryName(single_curve);
+        *out_error = "failed to build COMPOUNDCURVE geometry from " +
+                     std::string(geom_name != nullptr ? geom_name : "UNKNOWN");
       }
       return nullptr;
     }
@@ -1181,43 +1197,6 @@ void set_field_from_literal(OGRFeatureH feat, OGRFieldDefnH fld_defn, int idx, c
   }
 }
 
-void trace_feature_state_before_create(const std::string& table_name, OGRFeatureH feat, OGRFeatureDefnH defn) {
-  if (!sigsegv_trace_enabled() || feat == nullptr || defn == nullptr) {
-    return;
-  }
-  if (!starts_with_ci(table_name, "classa")) {
-    return;
-  }
-  int field_count = OGR_FD_GetFieldCount(defn);
-  for (int i = 0; i < field_count; ++i) {
-    OGRFieldDefnH fld = OGR_FD_GetFieldDefn(defn, i);
-    if (fld == nullptr) {
-      continue;
-    }
-    const char* fld_name = OGR_Fld_GetNameRef(fld);
-    OGRFieldType fld_type = OGR_Fld_GetType(fld);
-    int is_nullable = OGR_Fld_IsNullable(fld);
-    int is_set = OGR_F_IsFieldSet(feat, i);
-    int is_set_and_not_null = OGR_F_IsFieldSetAndNotNull(feat, i);
-    std::ostringstream out;
-    out << "insert feature_state table=\"" << table_name << "\" field=\"" << (fld_name != nullptr ? fld_name : "")
-        << "\" type=" << ogr_field_type_name_safe(fld_type) << " nullable=" << (is_nullable ? "yes" : "no")
-        << " set=" << (is_set ? "yes" : "no") << " set_not_null=" << (is_set_and_not_null ? "yes" : "no");
-    sigtrace(out.str());
-  }
-  int geom_field_count = OGR_FD_GetGeomFieldCount(defn);
-  for (int i = 0; i < geom_field_count; ++i) {
-    OGRGeomFieldDefnH geom_fld = OGR_FD_GetGeomFieldDefn(defn, i);
-    const char* geom_name = geom_fld != nullptr ? OGR_GFld_GetNameRef(geom_fld) : "";
-    int geom_nullable = geom_fld != nullptr ? OGR_GFld_IsNullable(geom_fld) : 1;
-    OGRGeometryH geom = OGR_F_GetGeomFieldRef(feat, i);
-    std::ostringstream out;
-    out << "insert feature_state table=\"" << table_name << "\" geom_field=\"" << (geom_name != nullptr ? geom_name : "")
-        << "\" nullable=" << (geom_nullable ? "yes" : "no") << " set=" << (geom != nullptr ? "yes" : "no");
-    sigtrace(out.str());
-  }
-}
-
 std::string format_filter_literal(OGRFeatureH feat, int field_idx) {
   OGRFieldDefnH fld_defn = OGR_F_GetFieldDefnRef(feat, field_idx);
   if (fld_defn == nullptr) {
@@ -1361,12 +1340,6 @@ class GdalBackend final : public OpenFgdbBackend {
     if (db_it == dbs_.end()) {
       return OFGDB_OK;
     }
-    sigtrace("close enter db_handle=" + std::to_string(db_handle) +
-             " dataset=" + ptr_to_string(db_it->second.dataset) +
-             " path=\"" + db_it->second.path + "\"" +
-             " rows=" + std::to_string(rows_.size()) +
-             " cursors=" + std::to_string(cursors_.size()) +
-             " tables=" + std::to_string(tables_.size()));
     for (auto it = rows_.begin(); it != rows_.end();) {
       if (it->second.db_handle == db_handle) {
         destroy_row_locked(it->second);
@@ -1397,11 +1370,7 @@ class GdalBackend final : public OpenFgdbBackend {
         ++it;
       }
     }
-    sigtrace("close before GDALClose db_handle=" + std::to_string(db_handle) +
-             " dataset=" + ptr_to_string(db_it->second.dataset) +
-             " path=\"" + db_it->second.path + "\"");
     GDALClose(db_it->second.dataset);
-    sigtrace("close after GDALClose db_handle=" + std::to_string(db_handle));
     dbs_.erase(db_it);
     last_error_.clear();
     return OFGDB_OK;
@@ -2528,6 +2497,7 @@ class GdalBackend final : public OpenFgdbBackend {
     int geom_idx = resolve_geom_field_index_for_row_locked(row, column_name);
     if (geom_idx >= 0) {
       OGRGeometryH raw_geom = OGR_F_GetGeomFieldRef(row->feature, geom_idx);
+      GeometryContractKind declared_kind = get_declared_geom_kind_for_row_locked(row, geom_idx);
       OGRGeometryH geom = nullptr;
       std::string geometry_error;
       if (!normalize_geometry_for_row_read_locked(row, geom_idx, raw_geom, &geom, &geometry_error)) {
@@ -3302,11 +3272,6 @@ class GdalBackend final : public OpenFgdbBackend {
 
   int fail(int code, const std::string& message) {
     last_error_ = message;
-    if (sigsegv_trace_enabled()) {
-      std::ostringstream out;
-      out << "fail code=" << code << " message=\"" << shorten_for_trace(message) << "\"";
-      sigtrace(out.str());
-    }
     return code;
   }
 
@@ -3314,15 +3279,6 @@ class GdalBackend final : public OpenFgdbBackend {
     int cpl_no = CPLGetLastErrorNo();
     CPLErr cpl_type = CPLGetLastErrorType();
     const char* cpl_msg = CPLGetLastErrorMsg();
-    if (sigsegv_trace_enabled()) {
-      std::ostringstream out;
-      out << "fail_from_cpl code=" << code << " cpl_no=" << cpl_no << " cpl_type=" << static_cast<int>(cpl_type)
-          << " prefix=\"" << shorten_for_trace(prefix) << "\"";
-      if (cpl_msg != nullptr && *cpl_msg != '\0') {
-        out << " cpl_msg=\"" << shorten_for_trace(cpl_msg) << "\"";
-      }
-      sigtrace(out.str());
-    }
     if (cpl_msg == nullptr || *cpl_msg == '\0') {
       return fail(code, prefix);
     }
@@ -3365,12 +3321,6 @@ class GdalBackend final : public OpenFgdbBackend {
   int exec_sql_fallback_locked(DbState& db, const char* sql, uint64_t db_handle) {
     std::string stmt = trim(sql != nullptr ? sql : "");
     std::string stmt_upper = to_upper_copy(stmt);
-    if (sigsegv_trace_enabled()) {
-      std::ostringstream out;
-      out << "exec_sql_fallback enter db_handle=" << db_handle << " dataset=" << db.dataset << " path=\""
-          << shorten_for_trace(db.path) << "\" sql=\"" << shorten_for_trace(stmt) << "\"";
-      sigtrace(out.str());
-    }
 
     if (stmt_upper.rfind("CREATE TABLE", 0) == 0) {
       size_t name_start = std::strlen("CREATE TABLE");
@@ -3417,15 +3367,6 @@ class GdalBackend final : public OpenFgdbBackend {
                 "invalid OFGDB_GEOMETRY definition (allowed: POINT, MULTIPOINT, LINE, LINESTRING, CIRCULARSTRING, COMPOUNDCURVE, MULTILINE, MULTILINESTRING, MULTICURVE, POLYGON, CURVEPOLYGON, MULTIPOLYGON, MULTISURFACE): " +
                     trimmed_def);
           }
-          if (sigsegv_trace_enabled()) {
-            std::ostringstream out;
-            out << "create_table geometry_spec table=\"" << table_name << "\" col=\"" << geometry_spec.name
-                << "\" kind=" << geometry_contract_kind_name(geometry_spec.contract_kind) << " epsg=" << geometry_spec.epsg
-                << " dim=" << (OGR_GT_HasZ(geometry_spec.ogr_type) ? 3 : 2)
-                << " nullable=" << (geometry_spec.nullable ? "yes" : "no")
-                << " sql_def=\"" << shorten_for_trace(trimmed_def) << "\"";
-            sigtrace(out.str());
-          }
           geometry_defs.push_back(geometry_spec);
         } else {
           attribute_defs.push_back(trimmed_def);
@@ -3448,44 +3389,17 @@ class GdalBackend final : public OpenFgdbBackend {
           layer_options = CSLAddString(layer_options, "GEOMETRY_NULLABLE=NO");
         }
         if (geom.epsg > 0) {
-          if (sigsegv_trace_enabled()) {
-            std::ostringstream out;
-            out << "create_layer srs begin table=\"" << table_name << "\" epsg=" << geom.epsg;
-            sigtrace(out.str());
-          }
           layer_srs = OSRNewSpatialReference(nullptr);
           if (layer_srs == nullptr || OSRImportFromEPSG(layer_srs, geom.epsg) != OGRERR_NONE) {
-            if (sigsegv_trace_enabled()) {
-              std::ostringstream out;
-              out << "create_layer srs fail table=\"" << table_name << "\" epsg=" << geom.epsg;
-              sigtrace(out.str());
-            }
             if (layer_srs != nullptr) {
               OSRDestroySpatialReference(layer_srs);
             }
             CSLDestroy(layer_options);
             return fail(OFGDB_ERR_INVALID_ARG, "invalid EPSG code in OFGDB_GEOMETRY definition");
           }
-          if (sigsegv_trace_enabled()) {
-            std::ostringstream out;
-            out << "create_layer srs ok table=\"" << table_name << "\" epsg=" << geom.epsg;
-            sigtrace(out.str());
-          }
         }
       }
-      if (sigsegv_trace_enabled()) {
-        std::ostringstream out;
-        out << "create_layer begin table=\"" << table_name << "\" dataset=" << db.dataset
-            << " geom_type=" << static_cast<int>(layer_geom_type)
-            << " has_srs=" << (layer_srs != nullptr ? "yes" : "no");
-        sigtrace(out.str());
-      }
       OGRLayerH layer = GDALDatasetCreateLayer(db.dataset, table_name.c_str(), layer_srs, layer_geom_type, layer_options);
-      if (sigsegv_trace_enabled()) {
-        std::ostringstream out;
-        out << "create_layer end table=\"" << table_name << "\" layer=" << layer;
-        sigtrace(out.str());
-      }
       if (layer_srs != nullptr) {
         OSRDestroySpatialReference(layer_srs);
       }
@@ -3645,7 +3559,6 @@ class GdalBackend final : public OpenFgdbBackend {
           return fail(OFGDB_ERR_INVALID_ARG, message);
         }
       }
-      trace_feature_state_before_create(table_name, feat, defn);
       OGRErr err = OGR_L_CreateFeature(layer, feat);
       OGR_F_Destroy(feat);
       if (err != OGRERR_NONE) {
