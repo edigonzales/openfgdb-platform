@@ -10,8 +10,12 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import org.junit.Assume;
 import org.junit.Test;
@@ -170,6 +174,133 @@ public class OpenFgdbSmokeTest {
 
             api.execSql(db, "DELETE FROM t_delete_all");
             assertEquals(0, countRows(api, db, "t_delete_all"));
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void insertWithoutTIdAutoAssignsKey() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-insert-autokey-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE rgb(T_Id INTEGER PRIMARY KEY NOT NULL, iliCode VARCHAR)");
+            api.execSql(db, "INSERT INTO rgb(iliCode) VALUES ('Rot')");
+            api.execSql(db, "INSERT INTO rgb(iliCode) VALUES ('Blau')");
+        } finally {
+            api.close(db);
+        }
+
+        db = api.open(dbDir.toString());
+        try {
+            long table = api.openTable(db, "rgb");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    List<Integer> ids = new ArrayList<Integer>();
+                    while (true) {
+                        long fetched = api.fetchRow(cursor);
+                        if (fetched == 0L) {
+                            break;
+                        }
+                        try {
+                            assertFalse(api.rowIsNull(fetched, "T_Id"));
+                            ids.add(api.rowGetInt32(fetched, "T_Id"));
+                        } finally {
+                            api.closeRow(fetched);
+                        }
+                    }
+                    assertEquals(2, ids.size());
+                    Collections.sort(ids);
+                    assertEquals(Integer.valueOf(1), ids.get(0));
+                    assertEquals(Integer.valueOf(2), ids.get(1));
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void insertWithExplicitTIdStillWorks() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-insert-explicit-key-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE rgb(T_Id INTEGER PRIMARY KEY NOT NULL, iliCode VARCHAR)");
+            api.execSql(db, "INSERT INTO rgb(T_Id, iliCode) VALUES (7, 'Rot')");
+            api.execSql(db, "INSERT INTO rgb(iliCode) VALUES ('Blau')");
+        } finally {
+            api.close(db);
+        }
+
+        db = api.open(dbDir.toString());
+        try {
+            long table = api.openTable(db, "rgb");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    Map<String, Integer> idsByCode = new HashMap<String, Integer>();
+                    while (true) {
+                        long fetched = api.fetchRow(cursor);
+                        if (fetched == 0L) {
+                            break;
+                        }
+                        try {
+                            idsByCode.put(api.rowGetString(fetched, "iliCode"), api.rowGetInt32(fetched, "T_Id"));
+                        } finally {
+                            api.closeRow(fetched);
+                        }
+                    }
+                    assertEquals(2, idsByCode.size());
+                    assertEquals(Integer.valueOf(7), idsByCode.get("Rot"));
+                    assertEquals(Integer.valueOf(8), idsByCode.get("Blau"));
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void insertWithoutTIdOnTableWithoutKeyUnchanged() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-insert-no-key-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_plain(id INTEGER, iliCode VARCHAR)");
+            api.execSql(db, "INSERT INTO t_plain(iliCode) VALUES ('Rot')");
+
+            long table = api.openTable(db, "t_plain");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    assertTrue(fetched != 0L);
+                    try {
+                        assertTrue(api.rowIsNull(fetched, "id"));
+                        assertEquals("Rot", api.rowGetString(fetched, "iliCode"));
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
         } finally {
             api.close(db);
         }

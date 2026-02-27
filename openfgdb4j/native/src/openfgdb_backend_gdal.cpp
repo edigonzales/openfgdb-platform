@@ -23,6 +23,7 @@
 #include <string>
 #include <thread>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -476,6 +477,143 @@ int find_field_index_ci(OGRFeatureDefnH defn, const char* field_name) {
     }
   }
   return -1;
+}
+
+int find_preferred_sql_key_field_index(OGRFeatureDefnH defn, std::string* out_name) {
+  if (out_name != nullptr) {
+    out_name->clear();
+  }
+  if (defn == nullptr) {
+    return -1;
+  }
+  const char* key_candidates[] = {"T_Id", "T_ID"};
+  for (const char* candidate : key_candidates) {
+    int idx = find_field_index_ci(defn, candidate);
+    if (idx < 0) {
+      continue;
+    }
+    if (out_name != nullptr) {
+      OGRFieldDefnH fld = OGR_FD_GetFieldDefn(defn, idx);
+      const char* field_name = fld != nullptr ? OGR_Fld_GetNameRef(fld) : nullptr;
+      *out_name = (field_name != nullptr && *field_name != '\0') ? field_name : candidate;
+    }
+    return idx;
+  }
+  return -1;
+}
+
+bool compute_next_int64_key_value(OGRLayerH layer, int field_idx, long long* out_next, std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (layer == nullptr || out_next == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "layer/output missing";
+    }
+    return false;
+  }
+  OGRFeatureDefnH defn = OGR_L_GetLayerDefn(layer);
+  if (defn == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "failed to inspect layer definition";
+    }
+    return false;
+  }
+  OGRFieldDefnH fld = OGR_FD_GetFieldDefn(defn, field_idx);
+  if (fld == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "failed to inspect key field definition";
+    }
+    return false;
+  }
+  OGRFieldType type = OGR_Fld_GetType(fld);
+  if (type != OFTInteger && type != OFTInteger64) {
+    if (out_error != nullptr) {
+      *out_error = "key field is not numeric";
+    }
+    return false;
+  }
+  CPLErrorReset();
+  OGR_L_SetAttributeFilter(layer, nullptr);
+  OGR_L_ResetReading(layer);
+  GIntBig max_value = 0;
+  bool has_value = false;
+  while (true) {
+    OGRFeatureH current = OGR_L_GetNextFeature(layer);
+    if (current == nullptr) {
+      break;
+    }
+    if (OGR_F_IsFieldSetAndNotNull(current, field_idx)) {
+      GIntBig value = OGR_F_GetFieldAsInteger64(current, field_idx);
+      if (!has_value || value > max_value) {
+        max_value = value;
+        has_value = true;
+      }
+    }
+    OGR_F_Destroy(current);
+  }
+  if (CPLGetLastErrorType() > CE_Warning) {
+    if (out_error != nullptr) {
+      *out_error = "failed to scan key field values";
+    }
+    return false;
+  }
+  if (has_value && max_value >= std::numeric_limits<GIntBig>::max()) {
+    if (out_error != nullptr) {
+      *out_error = "key field overflow";
+    }
+    return false;
+  }
+  GIntBig next_value = has_value ? (max_value + 1) : 1;
+  if (next_value <= 0) {
+    next_value = 1;
+  }
+  *out_next = static_cast<long long>(next_value);
+  return true;
+}
+
+bool assign_missing_sql_key_from_t_id(
+    OGRLayerH layer,
+    OGRFeatureH feat,
+    OGRFeatureDefnH defn,
+    std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (layer == nullptr || feat == nullptr || defn == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "layer/feature definition missing";
+    }
+    return false;
+  }
+  std::string key_name;
+  int key_idx = find_preferred_sql_key_field_index(defn, &key_name);
+  if (key_idx < 0) {
+    return true;
+  }
+  OGRFieldDefnH key_defn = OGR_FD_GetFieldDefn(defn, key_idx);
+  if (key_defn == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "failed to inspect key field definition";
+    }
+    return false;
+  }
+  OGRFieldType key_type = OGR_Fld_GetType(key_defn);
+  if (key_type != OFTInteger && key_type != OFTInteger64) {
+    if (out_error != nullptr) {
+      *out_error = "key field " + key_name + " is not numeric";
+    }
+    return false;
+  }
+  if (OGR_F_IsFieldSetAndNotNull(feat, key_idx)) {
+    return true;
+  }
+  long long next_value = 0;
+  if (!compute_next_int64_key_value(layer, key_idx, &next_value, out_error)) {
+    return false;
+  }
+  OGR_F_SetFieldInteger64(feat, key_idx, static_cast<GIntBig>(next_value));
+  return true;
 }
 
 int find_geom_field_index_ci(OGRFeatureDefnH defn, const char* field_name) {
@@ -3898,6 +4036,18 @@ class GdalBackend final : public OpenFgdbBackend {
           }
           return fail(OFGDB_ERR_INVALID_ARG, message);
         }
+      }
+      std::string key_error;
+      if (!assign_missing_sql_key_from_t_id(layer, feat, defn, &key_error)) {
+        OGR_F_Destroy(feat);
+        if (CPLGetLastErrorType() > CE_Warning) {
+          return fail_from_cpl(OFGDB_ERR_INTERNAL, "failed to assign missing key field value");
+        }
+        std::string message = "failed to assign missing key field value";
+        if (!key_error.empty()) {
+          message += ": " + key_error;
+        }
+        return fail(OFGDB_ERR_INVALID_ARG, message);
       }
       OGRErr err = OGR_L_CreateFeature(layer, feat);
       OGR_F_Destroy(feat);
