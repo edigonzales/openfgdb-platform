@@ -76,6 +76,9 @@ public final class OpenFgdbCiSmokeMain {
             require(relationships.contains("rel_classa_assoc"), "Relationship rel_classa_assoc missing");
 
             runCrudRoundtrip(api, db);
+            if ("gdal".equals(expectedBackend)) {
+                runNotNullAttributeChecks(api, db);
+            }
             runGeometryRoundtrip(api, db);
             runMultipointGeometryRoundtrip(api, db);
             runMultilineGeometryRoundtrip(api, db);
@@ -91,6 +94,52 @@ public final class OpenFgdbCiSmokeMain {
         } finally {
             api.close(db);
             deleteTreeQuiet(tempRoot);
+        }
+    }
+
+    private static void runNotNullAttributeChecks(OpenFgdb api, long db) throws Exception {
+        api.execSql(db, "CREATE TABLE t_notnull_ci(id INTEGER NOT NULL, name VARCHAR NOT NULL, opt VARCHAR)");
+        api.execSql(db, "INSERT INTO t_notnull_ci(id, name) VALUES (1, 'alpha')");
+
+        try {
+            api.execSql(db, "INSERT INTO t_notnull_ci(id, opt) VALUES (2, 'x')");
+            throw new IllegalStateException("Expected OpenFgdbException for missing NOT NULL column in SQL insert");
+        } catch (OpenFgdbException expected) {
+            require(expected.getErrorCode() == OpenFgdb.OFGDB_ERR_INVALID_ARG,
+                    "Expected OFGDB_ERR_INVALID_ARG for NOT NULL SQL insert violation, got " + expected.getErrorCode());
+            String msg = expected.getMessage().toLowerCase();
+            require(msg.contains("not null"), "Expected NOT NULL marker in SQL insert violation message: " + expected.getMessage());
+            require(msg.contains("name"), "Expected column name in SQL insert violation message: " + expected.getMessage());
+        }
+
+        long table = api.openTable(db, "t_notnull_ci");
+        try {
+            long cursor = api.search(table, "*", "");
+            try {
+                long fetched = api.fetchRow(cursor);
+                require(fetched != 0L, "No row returned for NOT NULL update check");
+                try {
+                    api.setNull(fetched, "name");
+                    try {
+                        api.update(table, fetched);
+                        throw new IllegalStateException("Expected OpenFgdbException for update-to-NULL on NOT NULL column");
+                    } catch (OpenFgdbException expected) {
+                        require(expected.getErrorCode() == OpenFgdb.OFGDB_ERR_INVALID_ARG,
+                                "Expected OFGDB_ERR_INVALID_ARG for NOT NULL update violation, got " + expected.getErrorCode());
+                        String msg = expected.getMessage().toLowerCase();
+                        require(msg.contains("not null"),
+                                "Expected NOT NULL marker in update violation message: " + expected.getMessage());
+                        require(msg.contains("name"),
+                                "Expected column name in update violation message: " + expected.getMessage());
+                    }
+                } finally {
+                    api.closeRow(fetched);
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, table);
         }
     }
 

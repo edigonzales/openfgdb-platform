@@ -180,6 +180,135 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void attributeNotNullIsEnforcedInSqlInsert() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-notnull-sql-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_nn(id INTEGER NOT NULL, name VARCHAR NOT NULL, opt VARCHAR)");
+
+            try {
+                api.execSql(db, "INSERT INTO t_nn(id, opt) VALUES (1, 'x')");
+                fail("Expected OpenFgdbException for missing NOT NULL column");
+            } catch (OpenFgdbException expected) {
+                assertNotNullViolation(expected, "name");
+            }
+
+            try {
+                api.execSql(db, "INSERT INTO t_nn(id, name, opt) VALUES (2, NULL, 'x')");
+                fail("Expected OpenFgdbException for explicit NULL in NOT NULL column");
+            } catch (OpenFgdbException expected) {
+                assertNotNullViolation(expected, "name");
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void attributeNotNullIsEnforcedInRowApiInsert() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-notnull-row-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_nn_row(id INTEGER NOT NULL, name VARCHAR NOT NULL, opt VARCHAR)");
+            long table = api.openTable(db, "t_nn_row");
+            try {
+                long row = api.createRow(table);
+                try {
+                    api.setInt32(row, "id", 1);
+                    try {
+                        api.insert(table, row);
+                        fail("Expected OpenFgdbException for missing NOT NULL column in row API insert");
+                    } catch (OpenFgdbException expected) {
+                        assertNotNullViolation(expected, "name");
+                    }
+                } finally {
+                    api.closeRow(row);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void attributeNotNullAllowsNullableColumns() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-notnull-nullable-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_nn_ok(id INTEGER NOT NULL, name VARCHAR NOT NULL, opt VARCHAR)");
+            api.execSql(db, "INSERT INTO t_nn_ok(id, name) VALUES (1, 'alpha')");
+
+            long table = api.openTable(db, "t_nn_ok");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    assertTrue(fetched != 0L);
+                    try {
+                        assertEquals(Integer.valueOf(1), api.rowGetInt32(fetched, "id"));
+                        assertEquals("alpha", api.rowGetString(fetched, "name"));
+                        assertTrue(api.rowIsNull(fetched, "opt"));
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void updateToNullOnNotNullColumnFails() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-notnull-update-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_nn_upd(id INTEGER NOT NULL, name VARCHAR NOT NULL, opt VARCHAR)");
+            api.execSql(db, "INSERT INTO t_nn_upd(id, name, opt) VALUES (1, 'alpha', 'x')");
+
+            long table = api.openTable(db, "t_nn_upd");
+            try {
+                long cursor = api.search(table, "*", "");
+                try {
+                    long fetched = api.fetchRow(cursor);
+                    assertTrue(fetched != 0L);
+                    try {
+                        api.setNull(fetched, "name");
+                        try {
+                            api.update(table, fetched);
+                            fail("Expected OpenFgdbException for update to NULL on NOT NULL column");
+                        } catch (OpenFgdbException expected) {
+                            assertNotNullViolation(expected, "name");
+                        }
+                    } finally {
+                        api.closeRow(fetched);
+                    }
+                } finally {
+                    api.closeCursor(cursor);
+                }
+            } finally {
+                api.closeTable(db, table);
+            }
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
     public void insertWithoutTIdAutoAssignsKey() throws Exception {
         OpenFgdb api = new OpenFgdb();
         Assume.assumeTrue(isRealGdal(api));
@@ -1138,6 +1267,15 @@ public class OpenFgdbSmokeTest {
             }
         } finally {
             api.close(db);
+        }
+    }
+
+    private static void assertNotNullViolation(OpenFgdbException expected, String columnName) {
+        assertEquals(OpenFgdb.OFGDB_ERR_INVALID_ARG, expected.getErrorCode());
+        String messageLower = expected.getMessage().toLowerCase();
+        assertTrue(messageLower.contains("not null"));
+        if (columnName != null && !columnName.isEmpty()) {
+            assertTrue(messageLower.contains(columnName.toLowerCase()));
         }
     }
 

@@ -616,6 +616,67 @@ bool assign_missing_sql_key_from_t_id(
   return true;
 }
 
+bool validate_required_attribute_fields(
+    const std::unordered_map<std::string, std::unordered_set<std::string>>& required_columns_by_table,
+    const std::string& table_name,
+    OGRFeatureH feat,
+    OGRFeatureDefnH defn,
+    const std::unordered_set<std::string>* explicitly_assigned_fields,
+    std::string* out_error) {
+  if (out_error != nullptr) {
+    out_error->clear();
+  }
+  if (feat == nullptr || defn == nullptr) {
+    if (out_error != nullptr) {
+      *out_error = "feature definition missing";
+    }
+    return false;
+  }
+  if (table_name.empty()) {
+    return true;
+  }
+  auto table_it = required_columns_by_table.find(to_upper_copy(table_name));
+  if (table_it == required_columns_by_table.end() || table_it->second.empty()) {
+    return true;
+  }
+  auto is_auto_generated_required_field = [](const std::string& upper_name) {
+    return upper_name == "T_ID" || upper_name == "OBJECTID";
+  };
+  for (const std::string& required_col_upper : table_it->second) {
+    int idx = find_field_index_ci(defn, required_col_upper.c_str());
+    if (idx < 0) {
+      if (out_error != nullptr) {
+        *out_error = "NOT NULL constraint column not found: " + required_col_upper;
+      }
+      return false;
+    }
+    bool has_value = OGR_F_IsFieldSetAndNotNull(feat, idx);
+    if (explicitly_assigned_fields != nullptr &&
+        explicitly_assigned_fields->find(required_col_upper) == explicitly_assigned_fields->end() &&
+        !(is_auto_generated_required_field(required_col_upper) && has_value)) {
+      if (out_error != nullptr) {
+        *out_error = "NOT NULL constraint violation: ";
+        *out_error += required_col_upper;
+      }
+      return false;
+    }
+    if (has_value) {
+      continue;
+    }
+    OGRFieldDefnH fld = OGR_FD_GetFieldDefn(defn, idx);
+    const char* field_name = fld != nullptr ? OGR_Fld_GetNameRef(fld) : nullptr;
+    if (out_error != nullptr) {
+      *out_error = "NOT NULL constraint violation";
+      if (field_name != nullptr && *field_name != '\0') {
+        *out_error += ": ";
+        *out_error += field_name;
+      }
+    }
+    return false;
+  }
+  return true;
+}
+
 int find_geom_field_index_ci(OGRFeatureDefnH defn, const char* field_name) {
   if (defn == nullptr || field_name == nullptr) {
     return -1;
@@ -2067,6 +2128,17 @@ class GdalBackend final : public OpenFgdbBackend {
     if (layer == nullptr) {
       return fail(OFGDB_ERR_NOT_FOUND, std::string("table not found: ") + table->layer_name);
     }
+    OGRFeatureDefnH defn = OGR_F_GetDefnRef(row->feature);
+    std::string required_error;
+    if (!validate_required_attribute_fields(
+            db->required_columns,
+            table->layer_name,
+            row->feature,
+            defn,
+            &row->touched_fields,
+            &required_error)) {
+      return fail(OFGDB_ERR_INVALID_ARG, required_error.empty() ? "NOT NULL constraint violation" : required_error);
+    }
     OGRErr err = OGR_L_CreateFeature(layer, row->feature);
     if (err != OGRERR_NONE) {
       return fail_from_cpl(map_ogr_error(err), "failed to insert feature");
@@ -2115,6 +2187,12 @@ class GdalBackend final : public OpenFgdbBackend {
           break;
         }
       }
+    }
+
+    OGRFeatureDefnH defn = OGR_F_GetDefnRef(row->feature);
+    std::string required_error;
+    if (!validate_required_attribute_fields(db->required_columns, table->layer_name, row->feature, defn, nullptr, &required_error)) {
+      return fail(OFGDB_ERR_INVALID_ARG, required_error.empty() ? "NOT NULL constraint violation" : required_error);
     }
 
     OGRErr err = OGRERR_NONE;
@@ -2243,6 +2321,7 @@ class GdalBackend final : public OpenFgdbBackend {
       return fail(OFGDB_ERR_NOT_FOUND, std::string("unknown column: ") + column_name);
     }
     OGR_F_SetFieldString(row->feature, idx, value != nullptr ? value : "");
+    row->touched_fields.insert(to_upper_copy(column_name));
     last_error_.clear();
     return OFGDB_OK;
   }
@@ -2258,6 +2337,7 @@ class GdalBackend final : public OpenFgdbBackend {
       return fail(OFGDB_ERR_NOT_FOUND, std::string("unknown column: ") + column_name);
     }
     OGR_F_SetFieldInteger(row->feature, idx, value);
+    row->touched_fields.insert(to_upper_copy(column_name));
     last_error_.clear();
     return OFGDB_OK;
   }
@@ -2273,6 +2353,7 @@ class GdalBackend final : public OpenFgdbBackend {
       return fail(OFGDB_ERR_NOT_FOUND, std::string("unknown column: ") + column_name);
     }
     OGR_F_SetFieldDouble(row->feature, idx, value);
+    row->touched_fields.insert(to_upper_copy(column_name));
     last_error_.clear();
     return OFGDB_OK;
   }
@@ -2292,6 +2373,7 @@ class GdalBackend final : public OpenFgdbBackend {
     int idx = find_field_index_ci(OGR_F_GetDefnRef(row->feature), column_name);
     if (idx >= 0) {
       OGR_F_SetFieldBinary(row->feature, idx, size, data);
+      row->touched_fields.insert(to_upper_copy(column_name));
       last_error_.clear();
       return OFGDB_OK;
     }
@@ -2376,6 +2458,7 @@ class GdalBackend final : public OpenFgdbBackend {
     int idx = find_field_index_ci(OGR_F_GetDefnRef(row->feature), column_name);
     if (idx >= 0) {
       OGR_F_SetFieldNull(row->feature, idx);
+      row->touched_fields.insert(to_upper_copy(column_name));
       last_error_.clear();
       return OFGDB_OK;
     }
@@ -3033,6 +3116,7 @@ class GdalBackend final : public OpenFgdbBackend {
     GDALDatasetH dataset = nullptr;
     std::string path;
     std::unordered_map<std::string, std::unordered_map<std::string, GeometryContractKind>> geometry_contracts;
+    std::unordered_map<std::string, std::unordered_set<std::string>> required_columns;
   };
 
   struct TableState {
@@ -3088,6 +3172,7 @@ class GdalBackend final : public OpenFgdbBackend {
     RowKind kind = RowKind::kFeature;
     OGRFeatureH feature = nullptr;
     bool owns_feature = false;
+    std::unordered_set<std::string> touched_fields;
     std::unordered_map<std::string, SyntheticValue> synthetic_values;
   };
 
@@ -3787,6 +3872,7 @@ class GdalBackend final : public OpenFgdbBackend {
 
       std::vector<std::string> attribute_defs;
       std::vector<GeometrySqlColumnSpec> geometry_defs;
+      std::unordered_set<std::string> required_columns;
       for (const std::string& def : split_sql_top_level(defs)) {
         std::string trimmed_def = trim(def);
         if (trimmed_def.empty()) {
@@ -3797,6 +3883,8 @@ class GdalBackend final : public OpenFgdbBackend {
           continue;
         }
         std::string first_token = to_upper_copy(parts[0]);
+        // CHECK/UNIQUE/CONSTRAINT clauses are intentionally not executed in fallback SQL.
+        // This path only materializes physical fields; explicit CHECK semantics remain unsupported.
         if (first_token == "PRIMARY" || first_token == "FOREIGN" || first_token == "CONSTRAINT" ||
             first_token == "UNIQUE" || first_token == "CHECK") {
           continue;
@@ -3812,6 +3900,12 @@ class GdalBackend final : public OpenFgdbBackend {
           }
           geometry_defs.push_back(geometry_spec);
         } else {
+          if (contains_ci(trimmed_def, "NOT NULL")) {
+            std::string required_col = to_upper_copy(parts[0]);
+            if (required_col != "T_ID" && required_col != "OBJECTID") {
+              required_columns.insert(std::move(required_col));
+            }
+          }
           attribute_defs.push_back(trimmed_def);
         }
       }
@@ -3862,6 +3956,10 @@ class GdalBackend final : public OpenFgdbBackend {
         if (fld == nullptr) {
           return fail(OFGDB_ERR_INTERNAL, "failed to allocate field definition");
         }
+        bool nullable = !contains_ci(attribute_def, "NOT NULL");
+        if (!nullable) {
+          OGR_Fld_SetNullable(fld, FALSE);
+        }
         OGRErr err = OGR_L_CreateField(layer, fld, TRUE);
         OGR_Fld_Destroy(fld);
         if (err != OGRERR_NONE) {
@@ -3883,6 +3981,11 @@ class GdalBackend final : public OpenFgdbBackend {
         }
       } else {
         db.geometry_contracts.erase(to_upper_copy(table_name));
+      }
+      if (!required_columns.empty()) {
+        db.required_columns[to_upper_copy(table_name)] = std::move(required_columns);
+      } else {
+        db.required_columns.erase(to_upper_copy(table_name));
       }
       last_error_.clear();
       return OFGDB_OK;
@@ -3919,6 +4022,7 @@ class GdalBackend final : public OpenFgdbBackend {
         return fail_from_cpl(OFGDB_ERR_INTERNAL, "failed to drop table");
       }
       db.geometry_contracts.erase(to_upper_copy(table_name));
+      db.required_columns.erase(to_upper_copy(table_name));
       last_error_.clear();
       return OFGDB_OK;
     }
@@ -4021,16 +4125,20 @@ class GdalBackend final : public OpenFgdbBackend {
       if (cols.size() != values.size()) {
         return fail(OFGDB_ERR_INVALID_ARG, "column/value count mismatch");
       }
+      std::unordered_set<std::string> explicitly_assigned_columns;
+      explicitly_assigned_columns.reserve(cols.size());
       OGRFeatureDefnH defn = OGR_L_GetLayerDefn(layer);
       OGRFeatureH feat = OGR_F_Create(defn);
       if (feat == nullptr) {
         return fail(OFGDB_ERR_INTERNAL, "failed to allocate feature");
       }
       for (size_t i = 0; i < cols.size(); i++) {
+        std::string col_name = normalize_identifier(cols[i]);
+        explicitly_assigned_columns.insert(to_upper_copy(col_name));
         std::string column_error;
-        if (!set_column_from_literal_locked(&db, table_name, feat, defn, cols[i], values[i], &column_error)) {
+        if (!set_column_from_literal_locked(&db, table_name, feat, defn, col_name, values[i], &column_error)) {
           OGR_F_Destroy(feat);
-          std::string message = std::string("unknown column or invalid value: ") + cols[i];
+          std::string message = std::string("unknown column or invalid value: ") + col_name;
           if (!column_error.empty()) {
             message += " (" + column_error + ")";
           }
@@ -4048,6 +4156,17 @@ class GdalBackend final : public OpenFgdbBackend {
           message += ": " + key_error;
         }
         return fail(OFGDB_ERR_INVALID_ARG, message);
+      }
+      std::string required_error;
+      if (!validate_required_attribute_fields(
+              db.required_columns,
+              table_name,
+              feat,
+              defn,
+              &explicitly_assigned_columns,
+              &required_error)) {
+        OGR_F_Destroy(feat);
+        return fail(OFGDB_ERR_INVALID_ARG, required_error.empty() ? "NOT NULL constraint violation" : required_error);
       }
       OGRErr err = OGR_L_CreateFeature(layer, feat);
       OGR_F_Destroy(feat);
@@ -4098,6 +4217,12 @@ class GdalBackend final : public OpenFgdbBackend {
             }
             return fail(OFGDB_ERR_INVALID_ARG, message);
           }
+        }
+        std::string required_error;
+        if (!validate_required_attribute_fields(db.required_columns, table_name, feat, defn, nullptr, &required_error)) {
+          OGR_F_Destroy(feat);
+          OGR_L_SetAttributeFilter(layer, nullptr);
+          return fail(OFGDB_ERR_INVALID_ARG, required_error.empty() ? "NOT NULL constraint violation" : required_error);
         }
         OGRErr err = OGR_L_SetFeature(layer, feat);
         OGR_F_Destroy(feat);
