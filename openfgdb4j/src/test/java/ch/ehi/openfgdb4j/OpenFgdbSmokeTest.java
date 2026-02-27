@@ -116,6 +116,66 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void deleteByEqWorks() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-delete-eq-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_delete_eq(id INTEGER, t_id INTEGER)");
+            api.execSql(db, "INSERT INTO t_delete_eq(id, t_id) VALUES (1, 1)");
+            api.execSql(db, "INSERT INTO t_delete_eq(id, t_id) VALUES (2, 2)");
+            api.execSql(db, "INSERT INTO t_delete_eq(id, t_id) VALUES (3, 3)");
+            assertEquals(3, countRows(api, db, "t_delete_eq"));
+
+            api.execSql(db, "DELETE FROM t_delete_eq WHERE t_id=1");
+            assertEquals(2, countRows(api, db, "t_delete_eq"));
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void deleteByInWorks() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-delete-in-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_delete_in(id INTEGER, t_id INTEGER)");
+            api.execSql(db, "INSERT INTO t_delete_in(id, t_id) VALUES (1, 1)");
+            api.execSql(db, "INSERT INTO t_delete_in(id, t_id) VALUES (2, 2)");
+            api.execSql(db, "INSERT INTO t_delete_in(id, t_id) VALUES (3, 3)");
+            api.execSql(db, "INSERT INTO t_delete_in(id, t_id) VALUES (4, 4)");
+            assertEquals(4, countRows(api, db, "t_delete_in"));
+
+            api.execSql(db, "DELETE FROM t_delete_in WHERE t_id IN (2,3)");
+            assertEquals(2, countRows(api, db, "t_delete_in"));
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
+    public void deleteNoWhereWorks() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-delete-all-").resolve("test.gdb");
+        long db = api.create(dbDir.toString());
+        try {
+            api.execSql(db, "CREATE TABLE t_delete_all(id INTEGER, t_id INTEGER)");
+            api.execSql(db, "INSERT INTO t_delete_all(id, t_id) VALUES (1, 1)");
+            api.execSql(db, "INSERT INTO t_delete_all(id, t_id) VALUES (2, 2)");
+            assertEquals(2, countRows(api, db, "t_delete_all"));
+
+            api.execSql(db, "DELETE FROM t_delete_all");
+            assertEquals(0, countRows(api, db, "t_delete_all"));
+        } finally {
+            api.close(db);
+        }
+    }
+
+    @Test
     public void geometryColumnIsRegisteredAndReadable() throws Exception {
         OpenFgdb api = new OpenFgdb();
         Path dbDir = Files.createTempDirectory("openfgdb4j-geom-").resolve("test.gdb");

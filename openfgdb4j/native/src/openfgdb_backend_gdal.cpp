@@ -172,6 +172,131 @@ std::string unquote(std::string value) {
   return value;
 }
 
+std::string normalize_identifier(std::string value) {
+  value = trim(value);
+  if (!value.empty() && value.back() == ';') {
+    value.pop_back();
+  }
+  value = trim(value);
+  if (value.empty()) {
+    return value;
+  }
+  size_t dot = value.find_last_of('.');
+  if (dot != std::string::npos) {
+    value = value.substr(dot + 1);
+  }
+  value = trim(value);
+  value = unquote(value);
+  return value;
+}
+
+struct SimpleWherePredicate {
+  std::string column;
+  std::vector<long long> values;
+  bool is_in = false;
+};
+
+bool parse_int64_strict(const std::string& token, long long* out) {
+  std::string trimmed = trim(token);
+  if (trimmed.empty()) {
+    return false;
+  }
+  size_t pos = 0;
+  long long value = 0;
+  try {
+    value = std::stoll(trimmed, &pos, 10);
+  } catch (const std::exception&) {
+    return false;
+  }
+  if (pos != trimmed.size()) {
+    return false;
+  }
+  if (out != nullptr) {
+    *out = value;
+  }
+  return true;
+}
+
+bool parse_simple_where(const std::string& clause, SimpleWherePredicate* out, std::string* error) {
+  if (out == nullptr) {
+    return false;
+  }
+  std::string trimmed = trim(clause);
+  if (!trimmed.empty() && trimmed.back() == ';') {
+    trimmed.pop_back();
+  }
+  trimmed = trim(trimmed);
+  if (trimmed.empty()) {
+    if (error != nullptr) {
+      *error = "empty WHERE clause";
+    }
+    return false;
+  }
+  std::string upper = to_upper_copy(trimmed);
+  size_t in_pos = upper.find(" IN ");
+  size_t in_len = 4;
+  if (in_pos == std::string::npos) {
+    in_pos = upper.find(" IN(");
+    if (in_pos != std::string::npos) {
+      in_len = 3;
+    }
+  }
+  if (in_pos != std::string::npos) {
+    std::string col = trim(trimmed.substr(0, in_pos));
+    std::string rest = trim(trimmed.substr(in_pos + in_len));
+    if (rest.empty() || rest.front() != '(' || rest.back() != ')') {
+      if (error != nullptr) {
+        *error = "IN clause must use parentheses";
+      }
+      return false;
+    }
+    std::string list = rest.substr(1, rest.size() - 2);
+    std::vector<std::string> parts = split(list, ',');
+    if (parts.empty()) {
+      if (error != nullptr) {
+        *error = "IN list is empty";
+      }
+      return false;
+    }
+    out->column = normalize_identifier(col);
+    out->values.clear();
+    out->values.reserve(parts.size());
+    for (const std::string& item : parts) {
+      long long value = 0;
+      if (!parse_int64_strict(item, &value)) {
+        if (error != nullptr) {
+          *error = "IN list contains non-integer literal";
+        }
+        return false;
+      }
+      out->values.push_back(value);
+    }
+    out->is_in = true;
+    return !out->column.empty();
+  }
+  size_t eq_pos = trimmed.find('=');
+  if (eq_pos == std::string::npos) {
+    if (error != nullptr) {
+      *error = "unsupported WHERE clause";
+    }
+    return false;
+  }
+  std::string col = trim(trimmed.substr(0, eq_pos));
+  std::string rhs = trim(trimmed.substr(eq_pos + 1));
+  long long value = 0;
+  if (!parse_int64_strict(rhs, &value)) {
+    if (error != nullptr) {
+      *error = "rhs is not an integer literal";
+    }
+    return false;
+  }
+  out->column = normalize_identifier(col);
+  out->values.clear();
+  out->values.push_back(value);
+  out->is_in = false;
+  return !out->column.empty();
+}
+
 char* dup_cstr(const std::string& value) {
   char* out = static_cast<char*>(std::malloc(value.size() + 1));
   if (out == nullptr) {
@@ -370,6 +495,75 @@ int find_geom_field_index_ci(OGRFeatureDefnH defn, const char* field_name) {
     }
   }
   return -1;
+}
+
+OGRLayerH find_layer_by_name_ci(GDALDatasetH dataset, const std::string& name) {
+  if (dataset == nullptr || name.empty()) {
+    return nullptr;
+  }
+  OGRLayerH layer = GDALDatasetGetLayerByName(dataset, name.c_str());
+  if (layer != nullptr) {
+    return layer;
+  }
+  int count = GDALDatasetGetLayerCount(dataset);
+  for (int i = 0; i < count; i++) {
+    OGRLayerH candidate = GDALDatasetGetLayer(dataset, i);
+    if (candidate == nullptr) {
+      continue;
+    }
+    const char* layer_name = OGR_L_GetName(candidate);
+    if (layer_name != nullptr && equals_ci(layer_name, name)) {
+      return candidate;
+    }
+  }
+  return nullptr;
+}
+
+OGRErr delete_with_simple_where(OGRLayerH layer, const SimpleWherePredicate& pred, std::string* error) {
+  if (layer == nullptr) {
+    if (error != nullptr) {
+      *error = "layer is null";
+    }
+    return OGRERR_FAILURE;
+  }
+  if (pred.values.empty()) {
+    return OGRERR_NONE;
+  }
+  OGRFeatureDefnH defn = OGR_L_GetLayerDefn(layer);
+  int field_index = find_field_index_ci(defn, pred.column.c_str());
+  if (field_index < 0) {
+    if (error != nullptr) {
+      *error = "unknown column in DELETE WHERE: " + pred.column;
+    }
+    return OGRERR_FAILURE;
+  }
+  std::unordered_set<long long> wanted;
+  wanted.reserve(pred.values.size());
+  for (long long value : pred.values) {
+    wanted.insert(value);
+  }
+  OGR_L_ResetReading(layer);
+  while (true) {
+    OGRFeatureH feat = OGR_L_GetNextFeature(layer);
+    if (feat == nullptr) {
+      break;
+    }
+    bool match = false;
+    if (OGR_F_IsFieldSetAndNotNull(feat, field_index)) {
+      long long v = OGR_F_GetFieldAsInteger64(feat, field_index);
+      match = (wanted.find(v) != wanted.end());
+    }
+    if (match) {
+      OGRErr err = OGR_L_DeleteFeature(layer, OGR_F_GetFID(feat));
+      OGR_F_Destroy(feat);
+      if (err != OGRERR_NONE) {
+        return err;
+      }
+    } else {
+      OGR_F_Destroy(feat);
+    }
+  }
+  return OGRERR_NONE;
 }
 
 enum class GeometryContractKind {
@@ -3602,11 +3796,46 @@ class GdalBackend final : public OpenFgdbBackend {
         table_name = trim(stmt.substr(from_start, where_pos - from_start));
         where_clause = trim(stmt.substr(where_pos + 7));
       }
-      OGRLayerH layer = GDALDatasetGetLayerByName(db.dataset, table_name.c_str());
+      table_name = normalize_identifier(table_name);
+      OGRLayerH layer = find_layer_by_name_ci(db.dataset, table_name);
       if (layer == nullptr) {
         return fail(OFGDB_ERR_NOT_FOUND, "table does not exist");
       }
-      OGR_L_SetAttributeFilter(layer, where_clause.empty() ? nullptr : where_clause.c_str());
+      if (!where_clause.empty()) {
+        CPLErrorReset();
+        OGRErr filter_err = OGR_L_SetAttributeFilter(layer, where_clause.c_str());
+        if (filter_err != OGRERR_NONE) {
+          std::string filter_msg = CPLGetLastErrorMsg();
+          OGR_L_SetAttributeFilter(layer, nullptr);
+          SimpleWherePredicate pred;
+          std::string parse_error;
+          if (parse_simple_where(where_clause, &pred, &parse_error)) {
+            CPLErrorReset();
+            std::string manual_error;
+            OGRErr del_err = delete_with_simple_where(layer, pred, &manual_error);
+            OGR_L_SetAttributeFilter(layer, nullptr);
+            if (del_err != OGRERR_NONE) {
+              if (!manual_error.empty()) {
+                return fail(OFGDB_ERR_INVALID_ARG, manual_error);
+              }
+              return fail_from_cpl(map_ogr_error(del_err), "failed to delete feature");
+            }
+            last_error_.clear();
+            return OFGDB_OK;
+          }
+          if (!filter_msg.empty()) {
+            return fail(OFGDB_ERR_INVALID_ARG,
+                        std::string("DELETE WHERE unsupported: ") + where_clause + " (OGR: " + filter_msg + ")");
+          }
+          if (!parse_error.empty()) {
+            return fail(OFGDB_ERR_INVALID_ARG,
+                        std::string("DELETE WHERE unsupported: ") + where_clause + " (" + parse_error + ")");
+          }
+          return fail(OFGDB_ERR_INVALID_ARG, std::string("DELETE WHERE unsupported: ") + where_clause);
+        }
+      } else {
+        OGR_L_SetAttributeFilter(layer, nullptr);
+      }
       OGR_L_ResetReading(layer);
       while (true) {
         OGRFeatureH feat = OGR_L_GetNextFeature(layer);
