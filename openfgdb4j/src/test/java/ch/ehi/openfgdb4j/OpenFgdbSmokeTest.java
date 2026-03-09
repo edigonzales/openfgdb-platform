@@ -6,6 +6,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
@@ -17,8 +18,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import javax.xml.parsers.DocumentBuilderFactory;
+
 import org.junit.Assume;
 import org.junit.Test;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
 public class OpenFgdbSmokeTest {
 
@@ -116,6 +124,30 @@ public class OpenFgdbSmokeTest {
             }
         } finally {
             api.close(db);
+        }
+    }
+
+    @Test
+    public void varcharLengthIsPersistedInDefinition() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-varchar-length-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_len(id INTEGER, name VARCHAR(20), note VARCHAR)");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            String definitionXml = readDefinitionXml(api, dbOpen, "t_len");
+            assertTrue(definitionXml != null && !definitionXml.isEmpty());
+            assertEquals(Integer.valueOf(20), findFieldLength(definitionXml, "name"));
+            Integer noteLength = findFieldLength(definitionXml, "note");
+            assertTrue(noteLength == null || noteLength.intValue() == 0);
+        } finally {
+            api.close(dbOpen);
         }
     }
 
@@ -1299,6 +1331,77 @@ public class OpenFgdbSmokeTest {
         } finally {
             api.closeTable(db, tableHandle);
         }
+    }
+
+    private static String readDefinitionXml(OpenFgdb api, long db, String itemName) throws Exception {
+        long tableHandle = api.openTable(db, "GDB_Items");
+        try {
+            long cursor = api.search(tableHandle, "Name,Definition", "");
+            try {
+                while (true) {
+                    long row = api.fetchRow(cursor);
+                    if (row == 0L) {
+                        return null;
+                    }
+                    try {
+                        String name = api.rowGetString(row, "Name");
+                        if (name != null && name.equalsIgnoreCase(itemName)) {
+                            return api.rowGetString(row, "Definition");
+                        }
+                    } finally {
+                        api.closeRow(row);
+                    }
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(db, tableHandle);
+        }
+    }
+
+    private static Integer findFieldLength(String definitionXml, String fieldName) throws Exception {
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (!(node instanceof Element) || !nodeNameMatches(node, "GPFieldInfoEx")) {
+                continue;
+            }
+            Element fieldNode = (Element) node;
+            String currentFieldName = childTagText(fieldNode, "Name");
+            if (currentFieldName == null || !currentFieldName.equalsIgnoreCase(fieldName)) {
+                continue;
+            }
+            String lengthText = childTagText(fieldNode, "Length");
+            if (lengthText == null || lengthText.isEmpty()) {
+                return null;
+            }
+            return Integer.valueOf(Integer.parseInt(lengthText));
+        }
+        return null;
+    }
+
+    private static String childTagText(Element parent, String tagName) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (child instanceof Element && nodeNameMatches(child, tagName)) {
+                String text = child.getTextContent();
+                return text != null ? text.trim() : null;
+            }
+        }
+        return null;
+    }
+
+    private static boolean nodeNameMatches(Node node, String localTagName) {
+        if (node == null || localTagName == null) {
+            return false;
+        }
+        String name = node.getNodeName();
+        return name != null && name.endsWith(localTagName);
     }
 
     private static boolean isRealGdal(OpenFgdb api) throws Exception {

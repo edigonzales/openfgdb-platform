@@ -1665,6 +1665,28 @@ OGRFieldType map_field_type_from_column_definition(const std::string& type_name,
   return type;
 }
 
+int parse_declared_character_width(const std::string& type_token) {
+  std::string token = to_upper_copy(trim(type_token));
+  if (!(starts_with_ci(token, "VARCHAR(") || starts_with_ci(token, "CHAR("))) {
+    return 0;
+  }
+  size_t open = token.find('(');
+  size_t close = token.rfind(')');
+  if (open == std::string::npos || close == std::string::npos || close <= open + 1) {
+    return 0;
+  }
+  std::string width_token = trim(token.substr(open + 1, close - open - 1));
+  if (width_token.empty()) {
+    return 0;
+  }
+  try {
+    int width = std::stoi(width_token);
+    return width > 0 ? width : 0;
+  } catch (const std::exception&) {
+    return 0;
+  }
+}
+
 void set_field_from_literal(OGRFeatureH feat, OGRFieldDefnH fld_defn, int idx, const std::string& raw_value) {
   std::string value = trim(raw_value);
   if (equals_ci(value, "NULL")) {
@@ -3955,6 +3977,12 @@ class GdalBackend final : public OpenFgdbBackend {
         OGRFieldDefnH fld = OGR_Fld_Create(col_name.c_str(), field_type);
         if (fld == nullptr) {
           return fail(OFGDB_ERR_INTERNAL, "failed to allocate field definition");
+        }
+        if (field_type == OFTString) {
+          int width = parse_declared_character_width(type_name);
+          if (width > 0) {
+            OGR_Fld_SetWidth(fld, width);
+          }
         }
         bool nullable = !contains_ci(attribute_def, "NOT NULL");
         if (!nullable) {
