@@ -144,8 +144,29 @@ public class OpenFgdbSmokeTest {
             String definitionXml = readDefinitionXml(api, dbOpen, "t_len");
             assertTrue(definitionXml != null && !definitionXml.isEmpty());
             assertEquals(Integer.valueOf(20), findFieldLength(definitionXml, "name"));
-            Integer noteLength = findFieldLength(definitionXml, "note");
-            assertTrue(noteLength == null || noteLength.intValue() == 0);
+            assertEquals(Integer.valueOf(65536), findFieldLength(definitionXml, "note"));
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
+    public void smallintIsPersistedAsArcgisShort() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-smallint-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_bool(id INTEGER, flag SMALLINT)");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            String definitionXml = readDefinitionXml(api, dbOpen, "t_bool");
+            assertTrue(definitionXml != null && !definitionXml.isEmpty());
+            assertEquals("esriFieldTypeSmallInteger", findFieldType(definitionXml, "flag"));
         } finally {
             api.close(dbOpen);
         }
@@ -1380,6 +1401,26 @@ public class OpenFgdbSmokeTest {
                 return null;
             }
             return Integer.valueOf(Integer.parseInt(lengthText));
+        }
+        return null;
+    }
+
+    private static String findFieldType(String definitionXml, String fieldName) throws Exception {
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (!(node instanceof Element) || !nodeNameMatches(node, "GPFieldInfoEx")) {
+                continue;
+            }
+            Element fieldNode = (Element) node;
+            String currentFieldName = childTagText(fieldNode, "Name");
+            if (currentFieldName == null || !currentFieldName.equalsIgnoreCase(fieldName)) {
+                continue;
+            }
+            return childTagText(fieldNode, "FieldType");
         }
         return null;
     }

@@ -405,6 +405,9 @@ const char* ogr_field_type_name_safe(OGRFieldType type) {
 
 OGRFieldType map_field_type_from_string(const std::string& in) {
   std::string type = to_upper_copy(in);
+  if (starts_with_ci(type, "SMALLINT") || starts_with_ci(type, "BOOLEAN")) {
+    return OFTInteger;
+  }
   if (contains_ci(type, "BIGINT") || contains_ci(type, "INT64")) {
     return OFTInteger64;
   }
@@ -1665,6 +1668,14 @@ OGRFieldType map_field_type_from_column_definition(const std::string& type_name,
   return type;
 }
 
+OGRFieldSubType map_field_subtype_from_column_definition(const std::string& type_name) {
+  std::string type = to_upper_copy(trim(type_name));
+  if (starts_with_ci(type, "SMALLINT") || starts_with_ci(type, "BOOLEAN")) {
+    return OFSTInt16;
+  }
+  return OFSTNone;
+}
+
 int parse_declared_character_width(const std::string& type_token) {
   std::string token = to_upper_copy(trim(type_token));
   if (!(starts_with_ci(token, "VARCHAR(") || starts_with_ci(token, "CHAR("))) {
@@ -2686,6 +2697,7 @@ class GdalBackend final : public OpenFgdbBackend {
     if (new_field == nullptr) {
       return fail(OFGDB_ERR_INTERNAL, "failed to allocate field definition");
     }
+    OGR_Fld_SetSubType(new_field, OGR_Fld_GetSubType(current_field));
     OGR_Fld_SetDomainName(new_field, domain_name);
     OGRErr err = OGR_L_AlterFieldDefn(layer, field_idx, new_field, ALTER_DOMAIN_FLAG);
     OGR_Fld_Destroy(new_field);
@@ -3974,9 +3986,13 @@ class GdalBackend final : public OpenFgdbBackend {
         std::string col_name = parts[0];
         std::string type_name = parts[1];
         OGRFieldType field_type = map_field_type_from_column_definition(type_name, attribute_def);
+        OGRFieldSubType field_subtype = map_field_subtype_from_column_definition(type_name);
         OGRFieldDefnH fld = OGR_Fld_Create(col_name.c_str(), field_type);
         if (fld == nullptr) {
           return fail(OFGDB_ERR_INTERNAL, "failed to allocate field definition");
+        }
+        if (field_subtype != OFSTNone) {
+          OGR_Fld_SetSubType(fld, field_subtype);
         }
         if (field_type == OFTString) {
           int width = parse_declared_character_width(type_name);
