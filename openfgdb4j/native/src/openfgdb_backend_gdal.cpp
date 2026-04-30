@@ -428,8 +428,8 @@ OGRFieldType map_field_type_from_string(const std::string& in) {
 }
 
 OGRFieldType map_field_type_from_symbolic_name(const std::string& in) {
-  std::string type = to_upper_copy(in);
-  if (type == "INTEGER" || type == "INT") {
+  std::string type = to_upper_copy(trim(in));
+  if (type == "INTEGER" || type == "INT" || type == "SMALLINT" || type == "SHORT" || type == "INT16" || type == "BOOLEAN") {
     return OFTInteger;
   }
   if (type == "STRING" || type == "TEXT") {
@@ -444,11 +444,22 @@ OGRFieldType map_field_type_from_symbolic_name(const std::string& in) {
   return OFTString;
 }
 
-std::string map_field_type_to_symbolic_name(OGRFieldType type) {
+OGRFieldSubType map_field_subtype_from_symbolic_name(const std::string& in) {
+  std::string type = to_upper_copy(trim(in));
+  if (type == "SMALLINT" || type == "SHORT" || type == "INT16" || type == "BOOLEAN") {
+    return OFSTInt16;
+  }
+  return OFSTNone;
+}
+
+std::string map_field_type_to_symbolic_name(OGRFieldType type, OGRFieldSubType subtype = OFSTNone) {
   switch (type) {
     case OFTInteger64:
       return "INTEGER";
     case OFTInteger:
+      if (subtype == OFSTInt16) {
+        return "SMALLINT";
+      }
       return "INTEGER";
     case OFTReal:
       return "DOUBLE";
@@ -2531,7 +2542,8 @@ class GdalBackend final : public OpenFgdbBackend {
         row["name"] = SyntheticValue::from_string(name);
         OGRFieldDomainH domain = GDALDatasetGetFieldDomain(db->dataset, name);
         if (domain != nullptr) {
-          row["fieldType"] = SyntheticValue::from_string(map_field_type_to_symbolic_name(OGR_FldDomain_GetFieldType(domain)));
+          row["fieldType"] = SyntheticValue::from_string(
+              map_field_type_to_symbolic_name(OGR_FldDomain_GetFieldType(domain), OGR_FldDomain_GetFieldSubType(domain)));
         } else {
           row["fieldType"] = SyntheticValue::from_string("STRING");
         }
@@ -2561,9 +2573,10 @@ class GdalBackend final : public OpenFgdbBackend {
       return OFGDB_OK;
     }
     OGRCodedValue coded_values[1] = {{nullptr, nullptr}};
+    std::string requested_type = field_type != nullptr ? field_type : "STRING";
     OGRFieldDomainH domain =
-        OGR_CodedFldDomain_Create(domain_name, "", map_field_type_from_symbolic_name(field_type != nullptr ? field_type : "STRING"), OFSTNone,
-                                  coded_values);
+        OGR_CodedFldDomain_Create(domain_name, "", map_field_type_from_symbolic_name(requested_type),
+                                  map_field_subtype_from_symbolic_name(requested_type), coded_values);
     if (domain == nullptr) {
       return fail(OFGDB_ERR_INTERNAL, "failed to allocate coded domain");
     }

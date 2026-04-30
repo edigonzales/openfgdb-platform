@@ -173,6 +173,39 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void smallintCodedDomainIsPersistedAsArcgisShort() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-smallint-domain-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_bool(id INTEGER, flag SMALLINT)");
+            api.createCodedDomain(dbCreate, "INTERLIS_BOOLEAN", "SMALLINT");
+            api.addCodedValue(dbCreate, "INTERLIS_BOOLEAN", "0", "false");
+            api.addCodedValue(dbCreate, "INTERLIS_BOOLEAN", "1", "true");
+            api.assignDomainToField(dbCreate, "t_bool", "flag", "INTERLIS_BOOLEAN");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            String tableDefinitionXml = readDefinitionXml(api, dbOpen, "t_bool");
+            assertTrue(tableDefinitionXml != null && !tableDefinitionXml.isEmpty());
+            assertEquals("esriFieldTypeSmallInteger", findFieldType(tableDefinitionXml, "flag"));
+            assertEquals("INTERLIS_BOOLEAN", findFieldDomainName(tableDefinitionXml, "flag"));
+
+            String domainDefinitionXml = readDefinitionXml(api, dbOpen, "INTERLIS_BOOLEAN");
+            assertTrue(domainDefinitionXml != null && !domainDefinitionXml.isEmpty());
+            assertEquals("esriFieldTypeSmallInteger", findFirstTagText(domainDefinitionXml, "FieldType"));
+            assertTrue(domainDefinitionXml.contains(">0</Code>"));
+            assertTrue(domainDefinitionXml.contains(">1</Code>"));
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
     public void deleteByEqWorks() throws Exception {
         OpenFgdb api = new OpenFgdb();
         Assume.assumeTrue(isRealGdal(api));
@@ -1421,6 +1454,41 @@ public class OpenFgdbSmokeTest {
                 continue;
             }
             return childTagText(fieldNode, "FieldType");
+        }
+        return null;
+    }
+
+    private static String findFieldDomainName(String definitionXml, String fieldName) throws Exception {
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (!(node instanceof Element) || !nodeNameMatches(node, "GPFieldInfoEx")) {
+                continue;
+            }
+            Element fieldNode = (Element) node;
+            String currentFieldName = childTagText(fieldNode, "Name");
+            if (currentFieldName == null || !currentFieldName.equalsIgnoreCase(fieldName)) {
+                continue;
+            }
+            return childTagText(fieldNode, "DomainName");
+        }
+        return null;
+    }
+
+    private static String findFirstTagText(String definitionXml, String tagName) throws Exception {
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (node instanceof Element && nodeNameMatches(node, tagName)) {
+                String text = node.getTextContent();
+                return text != null ? text.trim() : null;
+            }
         }
         return null;
     }
