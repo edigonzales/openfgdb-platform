@@ -1,0 +1,17 @@
+diff --git a/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp b/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp
+--- a/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp
++++ b/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp
+@@ -945,10 +945,9 @@ static CPLXMLNode *CreateXMLFieldDefinition(const OGRFieldDefn *poFieldDefn,
+         CPLAddXMLAttributeAndValue(psFieldType, "xmlns:typens",
+                                    "http://www.esri.com/schemas/ArcGIS/10.3");
+     }
+-    if (poGDBFieldDefn->IsNullable())
+-    {
+-        CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable", "true");
+-    }
++    CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable",
++                                poGDBFieldDefn->IsNullable() ? "true"
++                                                             : "false");
+     if (poGDBFieldDefn->IsRequired())
+     {
+         CPLCreateXMLElementAndValue(GPFieldInfoEx, "Required", "true");

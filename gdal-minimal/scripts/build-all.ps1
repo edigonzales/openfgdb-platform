@@ -125,6 +125,29 @@ function Extract-Archive([string] $ArchiveName, [string] $TargetDirName) {
   Remove-Item -Recurse -Force -LiteralPath $tmpRoot
 }
 
+function Apply-GdalPatches([string] $GdalSrcDirName) {
+  $writer = Join-Path $SrcDir "$GdalSrcDirName/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp"
+  if (-not (Test-Path -LiteralPath $writer)) {
+    throw "GDAL OpenFileGDB writer source not found: $writer"
+  }
+  $new = @'
+    CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable",
+                                poGDBFieldDefn->IsNullable() ? "true"
+                                                             : "false");
+'@
+  $content = Get-Content -Raw -LiteralPath $writer
+  if ($content.Contains('poGDBFieldDefn->IsNullable() ? "true"')) {
+    Write-Host 'GDAL patch already applied: openfilegdb field nullability'
+    return
+  }
+  $pattern = '    if \(poGDBFieldDefn->IsNullable\(\)\)\r?\n    \{\r?\n        CPLCreateXMLElementAndValue\(GPFieldInfoEx, "IsNullable", "true"\);\r?\n    \}\r?\n'
+  if ($content -notmatch $pattern) {
+    throw "GDAL patch context not found in $writer"
+  }
+  Set-Content -LiteralPath $writer -Value ([regex]::Replace($content, $pattern, $new, 1)) -NoNewline
+  Write-Host 'Applied GDAL patch: openfilegdb field nullability'
+}
+
 function Get-VsDevCmdPath {
   $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
   if (-not (Test-Path -LiteralPath $vswhere)) {
@@ -240,6 +263,7 @@ Download-Archive $SqliteUrl $SqliteArchive
 Extract-Archive $GdalArchive $GdalSrcDirName
 Extract-Archive $ProjArchive $ProjSrcDirName
 Extract-Archive $SqliteArchive $SqliteSrcDirName
+Apply-GdalPatches $GdalSrcDirName
 
 $SqliteLib = Join-Path $StageDir 'lib/sqlite3.lib'
 if (-not (Test-Path -LiteralPath $SqliteLib)) {

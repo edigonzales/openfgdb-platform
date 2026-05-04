@@ -151,6 +151,30 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void attributeNullabilityIsPersistedInDefinition() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Assume.assumeTrue(isRealGdal(api));
+        Path dbDir = Files.createTempDirectory("openfgdb4j-nullability-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_nn(id INTEGER NOT NULL, name VARCHAR NOT NULL, opt VARCHAR)");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            String definitionXml = readDefinitionXml(api, dbOpen, "t_nn");
+            assertTrue(definitionXml != null && !definitionXml.isEmpty());
+            assertEquals(Boolean.FALSE, findFieldNullable(definitionXml, "id"));
+            assertEquals(Boolean.FALSE, findFieldNullable(definitionXml, "name"));
+            assertEquals(Boolean.TRUE, findFieldNullable(definitionXml, "opt"));
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
     public void smallintIsPersistedAsArcgisShort() throws Exception {
         OpenFgdb api = new OpenFgdb();
         Assume.assumeTrue(isRealGdal(api));
@@ -1474,6 +1498,30 @@ public class OpenFgdbSmokeTest {
                 continue;
             }
             return childTagText(fieldNode, "DomainName");
+        }
+        return null;
+    }
+
+    private static Boolean findFieldNullable(String definitionXml, String fieldName) throws Exception {
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (!(node instanceof Element) || !nodeNameMatches(node, "GPFieldInfoEx")) {
+                continue;
+            }
+            Element fieldNode = (Element) node;
+            String currentFieldName = childTagText(fieldNode, "Name");
+            if (currentFieldName == null || !currentFieldName.equalsIgnoreCase(fieldName)) {
+                continue;
+            }
+            String nullableText = childTagText(fieldNode, "IsNullable");
+            if (nullableText == null || nullableText.isEmpty()) {
+                return null;
+            }
+            return Boolean.valueOf(Boolean.parseBoolean(nullableText));
         }
         return null;
     }
