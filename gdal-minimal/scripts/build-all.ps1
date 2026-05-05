@@ -126,26 +126,35 @@ function Extract-Archive([string] $ArchiveName, [string] $TargetDirName) {
 }
 
 function Apply-GdalPatches([string] $GdalSrcDirName) {
-  $writer = Join-Path $SrcDir "$GdalSrcDirName/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp"
-  if (-not (Test-Path -LiteralPath $writer)) {
-    throw "GDAL OpenFileGDB writer source not found: $writer"
+  $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
+  $patchDir = Join-Path $RootDir 'patches'
+  if (-not (Test-Path -LiteralPath $gdalSrc)) {
+    throw "GDAL source tree not found: $gdalSrc"
   }
-  $new = @'
-    CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable",
-                                poGDBFieldDefn->IsNullable() ? "true"
-                                                             : "false");
-'@
-  $content = Get-Content -Raw -LiteralPath $writer
-  if ($content.Contains('poGDBFieldDefn->IsNullable() ? "true"')) {
-    Write-Host 'GDAL patch already applied: openfilegdb field nullability'
-    return
+  if (-not (Test-Path -LiteralPath $patchDir)) {
+    throw "GDAL patch directory not found: $patchDir"
   }
-  $pattern = '    if \(poGDBFieldDefn->IsNullable\(\)\)\r?\n    \{\r?\n        CPLCreateXMLElementAndValue\(GPFieldInfoEx, "IsNullable", "true"\);\r?\n    \}\r?\n'
-  if ($content -notmatch $pattern) {
-    throw "GDAL patch context not found in $writer"
+
+  $patches = Get-ChildItem -LiteralPath $patchDir -Filter 'gdal-*.patch' | Sort-Object Name
+  foreach ($patch in $patches) {
+    & git -C $gdalSrc apply --check --ignore-whitespace $patch.FullName *> $null
+    if ($LASTEXITCODE -eq 0) {
+      & git -C $gdalSrc apply --ignore-whitespace $patch.FullName
+      if ($LASTEXITCODE -ne 0) {
+        throw "Failed to apply GDAL patch: $($patch.FullName)"
+      }
+      Write-Host "Applied GDAL patch: $($patch.Name)"
+      continue
+    }
+
+    & git -C $gdalSrc apply --reverse --check --ignore-whitespace $patch.FullName *> $null
+    if ($LASTEXITCODE -eq 0) {
+      Write-Host "GDAL patch already applied: $($patch.Name)"
+      continue
+    }
+
+    throw "GDAL patch context not found or patch failed: $($patch.FullName)"
   }
-  Set-Content -LiteralPath $writer -Value ([regex]::Replace($content, $pattern, $new, 1)) -NoNewline
-  Write-Host 'Applied GDAL patch: openfilegdb field nullability'
 }
 
 function Assert-GdalNullabilityPatchPresent([string] $GdalSrcDirName) {
@@ -157,7 +166,9 @@ function Assert-GdalNullabilityPatchPresent([string] $GdalSrcDirName) {
   $expected = 'CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable",' 
   $expectsFalse = 'poGDBFieldDefn->IsNullable() ? "true"'
   $expectsTail = ': "false");'
-  if (-not $content.Contains($expected) -or -not $content.Contains($expectsFalse) -or -not $content.Contains($expectsTail)) {
+  $expectsDebugGuard = 'OPENFGDB4J_DEBUG_NULLABILITY'
+  $expectsDebugLog = 'DebugNullabilityLog("CreateField-before-FileGDBField"'
+  if (-not $content.Contains($expected) -or -not $content.Contains($expectsFalse) -or -not $content.Contains($expectsTail) -or -not $content.Contains($expectsDebugGuard) -or -not $content.Contains($expectsDebugLog)) {
     throw "GDAL nullability patch verification failed in $writer"
   }
   Write-Host "Verified GDAL patch in source tree: $writer"
