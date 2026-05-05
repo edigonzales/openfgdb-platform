@@ -4,11 +4,22 @@ import ch.ehi.openfgdb4j.OpenFgdb;
 import ch.ehi.openfgdb4j.OpenFgdbException;
 
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
 
 public final class OpenFgdbCiSmokeMain {
     private OpenFgdbCiSmokeMain() {
@@ -16,11 +27,16 @@ public final class OpenFgdbCiSmokeMain {
 
     public static void main(String[] args) throws Exception {
         if (args.length != 1) {
-            throw new IllegalArgumentException("usage: OpenFgdbCiSmokeMain <gdal|adapter|gdal-fail|invalid-backend>");
+            throw new IllegalArgumentException(
+                    "usage: OpenFgdbCiSmokeMain <gdal|adapter|nullability-metadata|gdal-fail|invalid-backend>");
         }
         String scenario = args[0];
         if ("gdal".equals(scenario) || "adapter".equals(scenario)) {
             runHappyPath(scenario);
+            return;
+        }
+        if ("nullability-metadata".equals(scenario)) {
+            runNullabilityMetadataScenario();
             return;
         }
         if ("gdal-fail".equals(scenario)) {
@@ -93,6 +109,35 @@ public final class OpenFgdbCiSmokeMain {
             }
         } finally {
             api.close(db);
+            deleteTreeQuiet(tempRoot);
+        }
+    }
+
+    private static void runNullabilityMetadataScenario() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        String runtimeInfo = api.getRuntimeInfo();
+        require(runtimeInfo.contains("backend=gdal"), "Nullability metadata scenario requires gdal backend: " + runtimeInfo);
+        require(runtimeInfo.contains("impl=real_gdal"),
+                "Nullability metadata scenario requires real_gdal backend: " + runtimeInfo);
+
+        Path tempRoot = Files.createTempDirectory("openfgdb4j-nullability-ci-");
+        Path dbDir = tempRoot.resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_nn(id INTEGER NOT NULL, name VARCHAR NOT NULL, opt VARCHAR)");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            String definitionXml = readDefinitionXml(api, dbOpen, "t_nn");
+            require(definitionXml != null && !definitionXml.isEmpty(), "Definition XML missing for t_nn");
+            assertFieldNullable(definitionXml, "id", Boolean.FALSE);
+            assertFieldNullable(definitionXml, "name", Boolean.FALSE);
+            assertFieldNullable(definitionXml, "opt", Boolean.TRUE);
+        } finally {
+            api.close(dbOpen);
             deleteTreeQuiet(tempRoot);
         }
     }
@@ -832,9 +877,133 @@ public final class OpenFgdbCiSmokeMain {
         return ByteBuffer.wrap(wkb, 1, 4).order(order).getInt();
     }
 
+    private static String readDefinitionXml(OpenFgdb api, long dbHandle, String itemName) throws Exception {
+        long tableHandle = api.openTable(dbHandle, "GDB_Items");
+        try {
+            long cursor = api.search(tableHandle, "Name,Definition", "");
+            try {
+                while (true) {
+                    long row = api.fetchRow(cursor);
+                    if (row == 0L) {
+                        return null;
+                    }
+                    try {
+                        String rowName = api.rowGetString(row, "Name");
+                        if (rowName != null && rowName.equalsIgnoreCase(itemName)) {
+                            return api.rowGetString(row, "Definition");
+                        }
+                    } finally {
+                        api.closeRow(row);
+                    }
+                }
+            } finally {
+                api.closeCursor(cursor);
+            }
+        } finally {
+            api.closeTable(dbHandle, tableHandle);
+        }
+    }
+
+    private static void assertFieldNullable(String definitionXml, String fieldName, Boolean expectedNullable) throws Exception {
+        FieldNullableInspection inspection = inspectFieldNullable(definitionXml, fieldName);
+        require(expectedNullable.equals(inspection.parsedNullable),
+                "Unexpected IsNullable value for field '" + fieldName + "': expected <" + expectedNullable + "> but was <"
+                        + inspection.parsedNullable + ">; " + inspection.diagnosticLine);
+    }
+
+    private static FieldNullableInspection inspectFieldNullable(String definitionXml, String fieldName) throws Exception {
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (!(node instanceof Element) || !nodeNameMatches(node, "GPFieldInfoEx")) {
+                continue;
+            }
+            Element fieldNode = (Element) node;
+            String currentFieldName = childTagText(fieldNode, "Name");
+            if (currentFieldName == null || !currentFieldName.equalsIgnoreCase(fieldName)) {
+                continue;
+            }
+            String nullableText = childTagText(fieldNode, "IsNullable");
+            String diagnosticLine = buildFieldDiagnostic(fieldName, nullableText, fieldNode);
+            if (nullableText == null || nullableText.isEmpty()) {
+                return new FieldNullableInspection(null, diagnosticLine);
+            }
+            return new FieldNullableInspection(Boolean.valueOf(Boolean.parseBoolean(nullableText)), diagnosticLine);
+        }
+        return new FieldNullableInspection(null, "field=" + fieldName + "; GPFieldInfoEx node not found in definition");
+    }
+
+    private static String buildFieldDiagnostic(String fieldName, String nullableText, Element fieldNode) {
+        return "field=" + fieldName
+                + "; rawIsNullable=" + String.valueOf(nullableText)
+                + "; childTags=" + listChildTagNames(fieldNode)
+                + "; fieldXmlSnippet=\"" + summarizeXml(fieldNode.getTextContent()) + "\"";
+    }
+
+    private static String listChildTagNames(Element fieldNode) {
+        Set<String> names = new LinkedHashSet<String>();
+        NodeList children = fieldNode.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (!(child instanceof Element)) {
+                continue;
+            }
+            String name = child.getNodeName();
+            if (name != null && name.trim().length() > 0) {
+                names.add(name.trim());
+            }
+        }
+        return names.toString();
+    }
+
+    private static String summarizeXml(String text) {
+        if (text == null) {
+            return "";
+        }
+        String normalized = text.replace('\n', ' ').replace('\r', ' ').replace('\t', ' ').trim();
+        normalized = normalized.replaceAll("\\s+", " ");
+        if (normalized.length() <= 300) {
+            return normalized;
+        }
+        return normalized.substring(0, 300) + "...";
+    }
+
+    private static String childTagText(Element parent, String tagName) {
+        NodeList children = parent.getChildNodes();
+        for (int i = 0; i < children.getLength(); i++) {
+            Node child = children.item(i);
+            if (child instanceof Element && nodeNameMatches(child, tagName)) {
+                String text = child.getTextContent();
+                return text != null ? text.trim() : null;
+            }
+        }
+        return null;
+    }
+
+    private static boolean nodeNameMatches(Node node, String localTagName) {
+        if (node == null || localTagName == null) {
+            return false;
+        }
+        String name = node.getNodeName();
+        return name != null && name.endsWith(localTagName);
+    }
+
     private static void require(boolean condition, String message) {
         if (!condition) {
             throw new IllegalStateException(message);
+        }
+    }
+
+    private static final class FieldNullableInspection {
+        private final Boolean parsedNullable;
+        private final String diagnosticLine;
+
+        private FieldNullableInspection(Boolean parsedNullable, String diagnosticLine) {
+            this.parsedNullable = parsedNullable;
+            this.diagnosticLine = diagnosticLine;
         }
     }
 
