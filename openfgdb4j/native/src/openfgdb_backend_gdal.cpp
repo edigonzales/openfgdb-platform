@@ -51,6 +51,28 @@ bool env_true(const char* value) {
   return normalized == "1" || normalized == "true" || normalized == "yes";
 }
 
+bool nullability_debug_enabled() {
+  return env_true(std::getenv("OPENFGDB4J_DEBUG_NULLABILITY"));
+}
+
+void debug_nullability_native_create_field(const std::string& column_name,
+                                           const std::string& type_name,
+                                           bool nullable_from_sql,
+                                           OGRFieldType field_type,
+                                           int ogr_nullable_flag) {
+  if (!nullability_debug_enabled()) {
+    return;
+  }
+  std::fprintf(stderr,
+               "[openfgdb4j-nullability] native-create-field name=%s type=%s "
+               "nullableFromSql=%s ogrFieldType=%d ogrNullable=%s\n",
+               column_name.c_str(),
+               type_name.c_str(),
+               nullable_from_sql ? "true" : "false",
+               static_cast<int>(field_type),
+               ogr_nullable_flag ? "true" : "false");
+}
+
 std::string trim(const std::string& in) {
   size_t start = 0;
   while (start < in.size() && std::isspace(static_cast<unsigned char>(in[start])) != 0) {
@@ -4017,6 +4039,12 @@ class GdalBackend final : public OpenFgdbBackend {
         if (!nullable) {
           OGR_Fld_SetNullable(fld, FALSE);
         }
+        debug_nullability_native_create_field(
+            col_name,
+            type_name,
+            nullable,
+            field_type,
+            OGR_Fld_IsNullable(fld));
         OGRErr err = OGR_L_CreateField(layer, fld, TRUE);
         OGR_Fld_Destroy(fld);
         if (err != OGRERR_NONE) {

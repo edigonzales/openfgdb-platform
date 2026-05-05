@@ -93,15 +93,21 @@ if (-not (Test-Path -LiteralPath $libPath)) {
 
 $cp = "$ciClasses;$openfgdbJar"
 
-function Invoke-Scenario([string]$backend, [string]$scenario, [string]$gdalForceFail = '') {
+function Invoke-Scenario([string]$backend, [string]$scenario, [string]$gdalForceFail = '', [bool]$debugNullability = $false) {
   $oldBackend = $env:OPENFGDB4J_BACKEND
   $oldFail = $env:OPENFGDB4J_GDAL_FORCE_FAIL
+  $oldDebugNullability = $env:OPENFGDB4J_DEBUG_NULLABILITY
   try {
     $env:OPENFGDB4J_BACKEND = $backend
     if ([string]::IsNullOrWhiteSpace($gdalForceFail)) {
       if (Test-Path env:OPENFGDB4J_GDAL_FORCE_FAIL) { Remove-Item env:OPENFGDB4J_GDAL_FORCE_FAIL }
     } else {
       $env:OPENFGDB4J_GDAL_FORCE_FAIL = $gdalForceFail
+    }
+    if ($debugNullability) {
+      $env:OPENFGDB4J_DEBUG_NULLABILITY = '1'
+    } else {
+      if (Test-Path env:OPENFGDB4J_DEBUG_NULLABILITY) { Remove-Item env:OPENFGDB4J_DEBUG_NULLABILITY }
     }
 
     & $java '--enable-native-access=ALL-UNNAMED' "-Dopenfgdb4j.lib=$libPath" '-cp' $cp 'ch.ehi.openfgdb4j.ci.OpenFgdbCiSmokeMain' $scenario
@@ -119,12 +125,17 @@ function Invoke-Scenario([string]$backend, [string]$scenario, [string]$gdalForce
     } else {
       $env:OPENFGDB4J_GDAL_FORCE_FAIL = $oldFail
     }
+    if ($null -eq $oldDebugNullability) {
+      if (Test-Path env:OPENFGDB4J_DEBUG_NULLABILITY) { Remove-Item env:OPENFGDB4J_DEBUG_NULLABILITY }
+    } else {
+      $env:OPENFGDB4J_DEBUG_NULLABILITY = $oldDebugNullability
+    }
   }
 }
 
 Invoke-Scenario 'gdal' 'gdal'
 Invoke-Scenario 'adapter' 'adapter'
-Invoke-Scenario 'gdal' 'nullability-metadata'
+Invoke-Scenario 'gdal' 'nullability-metadata' '' $true
 Invoke-Scenario 'gdal' 'gdal-fail' '1'
 Invoke-Scenario 'invalid' 'invalid-backend'
 

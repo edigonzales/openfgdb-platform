@@ -68,6 +68,31 @@ static std::string WStringToString(const std::wstring &utf16string)
     return utf8string;
 }
 
+static bool IsNullabilityDebugEnabled()
+{
+    const char *pszValue =
+        CPLGetConfigOption("OPENFGDB4J_DEBUG_NULLABILITY", nullptr);
+    return pszValue != nullptr && CPLTestBool(pszValue);
+}
+
+static void DebugNullabilityLog(const char *pszStage, const char *pszFieldName,
+                                int bFieldNullable, int bRequired,
+                                int bEditable, int nType, int nAuxValue)
+{
+    if (!IsNullabilityDebugEnabled())
+    {
+        return;
+    }
+    std::fprintf(stderr,
+                 "[openfgdb4j-nullability] writer-stage=%s field=%s "
+                 "nullable=%s required=%s editable=%s type=%d aux=%d\n",
+                 pszStage != nullptr ? pszStage : "<null>",
+                 pszFieldName != nullptr ? pszFieldName : "<null>",
+                 bFieldNullable ? "true" : "false",
+                 bRequired ? "true" : "false",
+                 bEditable ? "true" : "false", nType, nAuxValue);
+}
+
 /*************************************************************************/
 /*                              LaunderName()                            */
 /*************************************************************************/
@@ -945,6 +970,12 @@ static CPLXMLNode *CreateXMLFieldDefinition(const OGRFieldDefn *poFieldDefn,
         CPLAddXMLAttributeAndValue(psFieldType, "xmlns:typens",
                                    "http://www.esri.com/schemas/ArcGIS/10.3");
     }
+    DebugNullabilityLog("CreateXMLFieldDefinition", poFieldDefn->GetNameRef(),
+                        poGDBFieldDefn->IsNullable(),
+                        poGDBFieldDefn->IsRequired(),
+                        poGDBFieldDefn->IsEditable(),
+                        static_cast<int>(poGDBFieldDefn->GetType()),
+                        bArcGISPro32OrLater ? 1 : 0);
     CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable",
                                 poGDBFieldDefn->IsNullable() ? "true"
                                                              : "false");
@@ -1380,6 +1411,10 @@ OGRErr OGROpenFileGDBLayer::CreateField(const OGRFieldDefn *poFieldIn,
     }
 
     const char *pszAlias = poField->GetAlternativeNameRef();
+    DebugNullabilityLog("CreateField-before-FileGDBField",
+                        poField->GetNameRef(), poField->IsNullable(),
+                        bRequired, bEditable, static_cast<int>(eType),
+                        bNullable ? 1 : 0);
     if (!m_poLyrTable->CreateField(std::make_unique<FileGDBField>(
             poField->GetNameRef(),
             pszAlias ? std::string(pszAlias) : std::string(), eType, bNullable,
@@ -2721,6 +2756,13 @@ void OGROpenFileGDBLayer::RefreshXMLDefinitionInMemory()
         {
             const int nOGRIdx = m_poFeatureDefn->GetFieldIndex(
                 poGDBFieldDefn->GetName().c_str());
+            DebugNullabilityLog("RefreshXMLDefinitionInMemory",
+                                poGDBFieldDefn->GetName().c_str(),
+                                poGDBFieldDefn->IsNullable(),
+                                poGDBFieldDefn->IsRequired(),
+                                poGDBFieldDefn->IsEditable(),
+                                static_cast<int>(poGDBFieldDefn->GetType()),
+                                nOGRIdx);
             if (nOGRIdx >= 0)
             {
                 const auto poFieldDefn = m_poFeatureDefn->GetFieldDefn(nOGRIdx);

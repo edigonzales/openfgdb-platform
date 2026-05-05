@@ -133,9 +133,9 @@ public final class OpenFgdbCiSmokeMain {
         try {
             String definitionXml = readDefinitionXml(api, dbOpen, "t_nn");
             require(definitionXml != null && !definitionXml.isEmpty(), "Definition XML missing for t_nn");
-            assertFieldNullable(definitionXml, "id", Boolean.FALSE);
-            assertFieldNullable(definitionXml, "name", Boolean.FALSE);
-            assertFieldNullable(definitionXml, "opt", Boolean.TRUE);
+            assertFieldNullable(definitionXml, "id", Boolean.FALSE, runtimeInfo);
+            assertFieldNullable(definitionXml, "name", Boolean.FALSE, runtimeInfo);
+            assertFieldNullable(definitionXml, "opt", Boolean.TRUE, runtimeInfo);
         } finally {
             api.close(dbOpen);
             deleteTreeQuiet(tempRoot);
@@ -904,11 +904,12 @@ public final class OpenFgdbCiSmokeMain {
         }
     }
 
-    private static void assertFieldNullable(String definitionXml, String fieldName, Boolean expectedNullable) throws Exception {
+    private static void assertFieldNullable(String definitionXml, String fieldName, Boolean expectedNullable, String runtimeInfo) throws Exception {
         FieldNullableInspection inspection = inspectFieldNullable(definitionXml, fieldName);
         require(expectedNullable.equals(inspection.parsedNullable),
                 "Unexpected IsNullable value for field '" + fieldName + "': expected <" + expectedNullable + "> but was <"
-                        + inspection.parsedNullable + ">; " + inspection.diagnosticLine);
+                        + inspection.parsedNullable + ">; runtimeInfo=" + runtimeInfo + "; definitionSnippet=\""
+                        + summarizeXml(definitionXml) + "\"; " + inspection.diagnosticLine);
     }
 
     private static FieldNullableInspection inspectFieldNullable(String definitionXml, String fieldName) throws Exception {
