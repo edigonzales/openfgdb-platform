@@ -125,6 +125,67 @@ function Extract-Archive([string] $ArchiveName, [string] $TargetDirName) {
   Remove-Item -Recurse -Force -LiteralPath $tmpRoot
 }
 
+function Get-GdalOpenFileGdbWriterPath([string] $GdalSrcDirName) {
+  return (Join-Path $SrcDir "$GdalSrcDirName/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp")
+}
+
+function Get-GdalDebugPatchPath {
+  return (Join-Path $RootDir 'patches/gdal-openfilegdb-nullability-debug.patch')
+}
+
+function Get-GdalPatchStat([string] $GdalSrc, [string] $PatchPath) {
+  $stat = (& git -C $GdalSrc apply --stat -- $PatchPath 2>&1 | Out-String).Trim()
+  if ([string]::IsNullOrWhiteSpace($stat)) {
+    return '<empty>'
+  }
+  return $stat
+}
+
+function Get-GdalNullabilityMissingMarkers([string] $Content, [bool] $IncludeDebugMarkers) {
+  $missing = @()
+  if ($Content -notmatch 'CPLCreateXMLElementAndValue\(\s*GPFieldInfoEx,\s*"IsNullable",\s*poGDBFieldDefn->IsNullable\(\)\s*\?\s*"true"\s*:\s*"false"\s*\)') {
+    $missing += 'IsNullable true/false serialization'
+  }
+  if ($IncludeDebugMarkers) {
+    if ($Content -notmatch 'OPENFGDB4J_DEBUG_NULLABILITY') {
+      $missing += 'debug guard'
+    }
+    if ($Content -notmatch 'DebugNullabilityLog\("CreateField-before-FileGDBField"') {
+      $missing += 'CreateField-before-FileGDBField log'
+    }
+    if ($Content -notmatch 'DebugNullabilityLog\("CreateField-after-FileGDBField"') {
+      $missing += 'CreateField-after-FileGDBField log'
+    }
+    if ($Content -notmatch 'DebugNullabilityLog\("RefreshXMLDefinitionInMemory"') {
+      $missing += 'RefreshXMLDefinitionInMemory log'
+    }
+    if ($Content -notmatch 'DebugNullabilityLog\("CreateXMLFieldDefinition"') {
+      $missing += 'CreateXMLFieldDefinition log'
+    }
+  }
+  return $missing
+}
+
+function Assert-GdalPatchEffect([string] $GdalSrcDirName, [string] $PatchName) {
+  $writer = Get-GdalOpenFileGdbWriterPath $GdalSrcDirName
+  if (-not (Test-Path -LiteralPath $writer)) {
+    throw "GDAL OpenFileGDB writer source not found for patch verification: $writer"
+  }
+  $content = Get-Content -Raw -LiteralPath $writer
+  if ($PatchName -eq 'gdal-openfilegdb-field-nullability.patch') {
+    $missing = @(Get-GdalNullabilityMissingMarkers $content $false)
+    if ($missing.Count -gt 0) {
+      throw "GDAL patch effect verification failed after $PatchName in $writer; missing markers: $($missing -join ', ')"
+    }
+  }
+  if ($PatchName -eq 'gdal-openfilegdb-nullability-debug.patch') {
+    $missing = @(Get-GdalNullabilityMissingMarkers $content $true)
+    if ($missing.Count -gt 0) {
+      throw "GDAL patch effect verification failed after $PatchName in $writer; missing markers: $($missing -join ', ')"
+    }
+  }
+}
+
 function Apply-GdalPatches([string] $GdalSrcDirName) {
   $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
   $patchDir = Join-Path $RootDir 'patches'
@@ -136,54 +197,51 @@ function Apply-GdalPatches([string] $GdalSrcDirName) {
   }
 
   $patches = Get-ChildItem -LiteralPath $patchDir -Filter 'gdal-*.patch' | Sort-Object Name
+  $script:AppliedGdalPatchNames = @()
   foreach ($patch in $patches) {
-    & git -C $gdalSrc apply --check --ignore-whitespace $patch.FullName *> $null
+    $patchPath = $patch.FullName
+    $patchName = $patch.Name
+    & git -C $gdalSrc apply --check --ignore-whitespace -- $patchPath *> $null
     if ($LASTEXITCODE -eq 0) {
-      & git -C $gdalSrc apply --ignore-whitespace $patch.FullName
+      $applyOutput = (& git -C $gdalSrc apply --ignore-whitespace -- $patchPath 2>&1 | Out-String).Trim()
       if ($LASTEXITCODE -ne 0) {
-        throw "Failed to apply GDAL patch: $($patch.FullName)"
+        throw "Failed to apply GDAL patch: $patchPath; output: $applyOutput"
       }
-      Write-Host "Applied GDAL patch: $($patch.Name)"
+      $script:AppliedGdalPatchNames += $patchName
+      Write-Host "Applied GDAL patch: $patchName"
+      Assert-GdalPatchEffect $GdalSrcDirName $patchName
       continue
     }
 
-    & git -C $gdalSrc apply --reverse --check --ignore-whitespace $patch.FullName *> $null
+    & git -C $gdalSrc apply --reverse --check --ignore-whitespace -- $patchPath *> $null
     if ($LASTEXITCODE -eq 0) {
-      Write-Host "GDAL patch already applied: $($patch.Name)"
+      $script:AppliedGdalPatchNames += "$patchName (already applied)"
+      Write-Host "GDAL patch already applied: $patchName"
+      Assert-GdalPatchEffect $GdalSrcDirName $patchName
       continue
     }
 
-    throw "GDAL patch context not found or patch failed: $($patch.FullName)"
+    $stat = Get-GdalPatchStat $gdalSrc $patchPath
+    throw "GDAL patch context not found or patch failed: $patchPath; git apply --stat: $stat"
   }
 }
 
 function Assert-GdalNullabilityPatchPresent([string] $GdalSrcDirName) {
-  $writer = Join-Path $SrcDir "$GdalSrcDirName/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp"
+  $writer = Get-GdalOpenFileGdbWriterPath $GdalSrcDirName
   if (-not (Test-Path -LiteralPath $writer)) {
     throw "GDAL OpenFileGDB writer source not found for verification: $writer"
   }
   $content = Get-Content -Raw -LiteralPath $writer
-  $missing = @()
-  if ($content -notmatch 'CPLCreateXMLElementAndValue\(\s*GPFieldInfoEx,\s*"IsNullable",\s*poGDBFieldDefn->IsNullable\(\)\s*\?\s*"true"\s*:\s*"false"\s*\)') {
-    $missing += 'IsNullable true/false serialization'
-  }
-  if ($content -notmatch 'OPENFGDB4J_DEBUG_NULLABILITY') {
-    $missing += 'debug guard'
-  }
-  if ($content -notmatch 'DebugNullabilityLog\("CreateField-before-FileGDBField"') {
-    $missing += 'CreateField-before-FileGDBField log'
-  }
-  if ($content -notmatch 'DebugNullabilityLog\("CreateField-after-FileGDBField"') {
-    $missing += 'CreateField-after-FileGDBField log'
-  }
-  if ($content -notmatch 'DebugNullabilityLog\("RefreshXMLDefinitionInMemory"') {
-    $missing += 'RefreshXMLDefinitionInMemory log'
-  }
-  if ($content -notmatch 'DebugNullabilityLog\("CreateXMLFieldDefinition"') {
-    $missing += 'CreateXMLFieldDefinition log'
-  }
+  $missing = @(Get-GdalNullabilityMissingMarkers $content $true)
   if ($missing.Count -gt 0) {
-    throw "GDAL nullability patch verification failed in $writer; missing markers: $($missing -join ', ')"
+    $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
+    $debugPatchPath = Get-GdalDebugPatchPath
+    $debugPatchStat = Get-GdalPatchStat $gdalSrc $debugPatchPath
+    $appliedPatchNames = '<none>'
+    if ($script:AppliedGdalPatchNames -and $script:AppliedGdalPatchNames.Count -gt 0) {
+      $appliedPatchNames = $script:AppliedGdalPatchNames -join ', '
+    }
+    throw "GDAL nullability patch verification failed in $writer; missing markers: $($missing -join ', '); applied patches: $appliedPatchNames; debug patch git apply --stat: $debugPatchStat"
   }
   Write-Host "Verified GDAL patch in source tree: $writer"
 }
