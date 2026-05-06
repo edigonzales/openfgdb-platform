@@ -134,11 +134,16 @@ function Get-GdalDebugPatchPath {
 }
 
 function Get-GdalPatchStat([string] $GdalSrc, [string] $PatchPath) {
-  $stat = (& git -C $GdalSrc apply --stat -- $PatchPath 2>&1 | Out-String).Trim()
+  $gitPatchPath = Get-GitPath $PatchPath
+  $stat = (& git -C $GdalSrc apply --stat $gitPatchPath 2>&1 | Out-String).Trim()
   if ([string]::IsNullOrWhiteSpace($stat)) {
     return '<empty>'
   }
   return $stat
+}
+
+function Get-GitPath([string] $Path) {
+  return $Path.Replace('\', '/')
 }
 
 function Get-GdalNullabilityMissingMarkers([string] $Content, [bool] $IncludeDebugMarkers) {
@@ -261,10 +266,10 @@ static void DebugNullabilityLog(const char *pszStage, const char *pszFieldName,
 '@
 
   $content = Insert-AfterFirst $content '    return utf8string;\r?\n}\r?\n' $debugHelpers 'debug helpers after WStringToString'
-  $content = Insert-BeforeFirst $content '    CPLCreateXMLElementAndValue\(GPFieldInfoEx, "IsNullable",\r?\n                                poGDBFieldDefn->IsNullable\(\) \? "true"' $createXmlLog 'CreateXMLFieldDefinition log'
+  $content = Insert-BeforeFirst $content '    CPLCreateXMLElementAndValue\(GPFieldInfoEx,\s*"IsNullable",\s*\r?\n\s*poGDBFieldDefn->IsNullable\(\)\s*\?\s*"true"' $createXmlLog 'CreateXMLFieldDefinition log'
   $content = Insert-AfterFirst $content '    const char \*pszAlias = poField->GetAlternativeNameRef\(\);\r?\n' $beforeCreateFieldLog 'CreateField-before-FileGDBField log'
-  $content = Insert-AfterFirst $content '    if \(!m_poLyrTable->CreateField\(std::make_unique<FileGDBField>\(\r?\n            poField->GetNameRef\(\),\r?\n            pszAlias \? std::string\(pszAlias\) : std::string\(\), eType, bNullable,\r?\n            bRequired, bEditable, nWidth, sDefault\)\)\)\r?\n    \{\r?\n        return OGRERR_FAILURE;\r?\n    \}\r?\n' $afterCreateFieldLog 'CreateField-after-FileGDBField log'
-  $content = Insert-AfterFirst $content '            const int nOGRIdx = m_poFeatureDefn->GetFieldIndex\(\r?\n                poGDBFieldDefn->GetName\(\).c_str\(\)\);\r?\n' $refreshLog 'RefreshXMLDefinitionInMemory log'
+  $content = Insert-AfterFirst $content '    if \(!m_poLyrTable->CreateField\(std::make_unique<FileGDBField>\(\s*poField->GetNameRef\(\),\s*pszAlias \? std::string\(pszAlias\) : std::string\(\), eType, bNullable,\s*bRequired, bEditable, nWidth, sDefault\)\)\)\s*\{\s*return OGRERR_FAILURE;\s*\}\s*' $afterCreateFieldLog 'CreateField-after-FileGDBField log'
+  $content = Insert-AfterFirst $content '            const int nOGRIdx = m_poFeatureDefn->GetFieldIndex\(\s*poGDBFieldDefn->GetName\(\).c_str\(\)\);\s*' $refreshLog 'RefreshXMLDefinitionInMemory log'
 
   Set-Content -LiteralPath $writer -Value $content -NoNewline
   Write-Host 'Applied GDAL inline debug patch fallback'
@@ -311,11 +316,13 @@ function Apply-GdalPatches([string] $GdalSrcDirName) {
   $patches = Get-ChildItem -LiteralPath $patchDir -Filter 'gdal-*.patch' | Sort-Object Name
   $script:AppliedGdalPatchNames = @()
   foreach ($patch in $patches) {
-    $patchPath = $patch.FullName
+    $patchPath = Get-GitPath ((Resolve-Path -LiteralPath $patch.FullName).Path)
     $patchName = $patch.Name
-    & git -C $gdalSrc apply --check --ignore-whitespace -- $patchPath *> $null
+    $patchLength = (Get-Item -LiteralPath $patch.FullName).Length
+    Write-Host "Checking GDAL patch: $patchName ($patchLength bytes)"
+    & git -C $gdalSrc apply --check --ignore-whitespace $patchPath *> $null
     if ($LASTEXITCODE -eq 0) {
-      $applyOutput = (& git -C $gdalSrc apply --ignore-whitespace -- $patchPath 2>&1 | Out-String).Trim()
+      $applyOutput = (& git -C $gdalSrc apply --ignore-whitespace $patchPath 2>&1 | Out-String).Trim()
       if ($LASTEXITCODE -ne 0) {
         throw "Failed to apply GDAL patch: $patchPath; output: $applyOutput"
       }
@@ -325,7 +332,7 @@ function Apply-GdalPatches([string] $GdalSrcDirName) {
       continue
     }
 
-    & git -C $gdalSrc apply --reverse --check --ignore-whitespace -- $patchPath *> $null
+    & git -C $gdalSrc apply --reverse --check --ignore-whitespace $patchPath *> $null
     if ($LASTEXITCODE -eq 0) {
       $script:AppliedGdalPatchNames += "$patchName (already applied)"
       Write-Host "GDAL patch already applied: $patchName"
