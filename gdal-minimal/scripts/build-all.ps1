@@ -148,8 +148,17 @@ function Get-GitPath([string] $Path) {
 
 function Get-GdalNullabilityMissingMarkers([string] $Content, [bool] $IncludeDebugMarkers) {
   $missing = @()
-  if ($Content -notmatch 'CPLCreateXMLElementAndValue\(\s*GPFieldInfoEx,\s*"IsNullable",\s*poGDBFieldDefn->IsNullable\(\)\s*\?\s*"true"\s*:\s*"false"\s*\)') {
-    $missing += 'IsNullable true/false serialization'
+  $createXmlMatch = [regex]::Match($Content, '(?ms)^static CPLXMLNode \*CreateXMLFieldDefinition\(.*?^}\s*$')
+  if (-not $createXmlMatch.Success) {
+    $missing += 'CreateXMLFieldDefinition function'
+  } else {
+    $createXmlBlock = $createXmlMatch.Value
+    if ($createXmlBlock -notmatch 'CPLCreateXMLElementAndValue\(\s*GPFieldInfoEx,\s*"IsNullable",\s*poGDBFieldDefn->IsNullable\(\)\s*\?\s*"true"\s*:\s*"false"\s*\)') {
+      $missing += 'CreateXMLFieldDefinition IsNullable true/false serialization'
+    }
+    if ($IncludeDebugMarkers -and $createXmlBlock -notmatch 'DebugNullabilityLog\("CreateXMLFieldDefinition"') {
+      $missing += 'CreateXMLFieldDefinition log'
+    }
   }
   if ($IncludeDebugMarkers) {
     if ($Content -notmatch 'OPENFGDB4J_DEBUG_NULLABILITY') {
@@ -163,9 +172,6 @@ function Get-GdalNullabilityMissingMarkers([string] $Content, [bool] $IncludeDeb
     }
     if ($Content -notmatch 'DebugNullabilityLog\("RefreshXMLDefinitionInMemory"') {
       $missing += 'RefreshXMLDefinitionInMemory log'
-    }
-    if ($Content -notmatch 'DebugNullabilityLog\("CreateXMLFieldDefinition"') {
-      $missing += 'CreateXMLFieldDefinition log'
     }
   }
   return $missing
@@ -186,6 +192,33 @@ function Insert-BeforeFirst([string] $Content, [string] $Pattern, [string] $Inse
     throw "GDAL inline debug patch context not found: $Label"
   }
   return $Content.Substring(0, $match.Index) + $Insertion + $Content.Substring($match.Index)
+}
+
+function Apply-GdalFieldNullabilityPatchInline([string] $GdalSrcDirName) {
+  $writer = Get-GdalOpenFileGdbWriterPath $GdalSrcDirName
+  if (-not (Test-Path -LiteralPath $writer)) {
+    throw "GDAL OpenFileGDB writer source not found for inline field patch: $writer"
+  }
+  $content = Get-Content -Raw -LiteralPath $writer
+  $replacement = @'
+    CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable",
+                                poGDBFieldDefn->IsNullable() ? "true"
+                                                             : "false");
+'@
+  $pattern = '    if \(poGDBFieldDefn->IsNullable\(\)\)\s*\{\s*CPLCreateXMLElementAndValue\(GPFieldInfoEx,\s*"IsNullable",\s*"true"\);\s*\}\s*'
+  $createXmlMatch = [regex]::Match($content, '(?ms)^static CPLXMLNode \*CreateXMLFieldDefinition\(.*?^}\s*$')
+  if (-not $createXmlMatch.Success) {
+    throw "GDAL inline field patch context not found: CreateXMLFieldDefinition function"
+  }
+  $createXmlBlock = $createXmlMatch.Value
+  $nullableMatch = [regex]::Match($createXmlBlock, $pattern)
+  if (-not $nullableMatch.Success) {
+    throw "GDAL inline field patch context not found: old nullable-only IsNullable block"
+  }
+  $replaceStart = $createXmlMatch.Index + $nullableMatch.Index
+  $content = $content.Substring(0, $replaceStart) + $replacement + $content.Substring($replaceStart + $nullableMatch.Length)
+  Set-Content -LiteralPath $writer -Value $content -NoNewline
+  Write-Host 'Applied GDAL inline field nullability patch fallback'
 }
 
 function Apply-GdalNullabilityDebugPatchInline([string] $GdalSrcDirName) {
@@ -266,7 +299,7 @@ static void DebugNullabilityLog(const char *pszStage, const char *pszFieldName,
 '@
 
   $content = Insert-AfterFirst $content '    return utf8string;\r?\n}\r?\n' $debugHelpers 'debug helpers after WStringToString'
-  $content = Insert-BeforeFirst $content '    CPLCreateXMLElementAndValue\(GPFieldInfoEx,\s*"IsNullable",\s*\r?\n\s*poGDBFieldDefn->IsNullable\(\)\s*\?\s*"true"' $createXmlLog 'CreateXMLFieldDefinition log'
+  $content = Insert-AfterFirst $content '    auto psFieldType =\s*CPLCreateXMLElementAndValue\(GPFieldInfoEx,\s*"FieldType",\s*pszFieldType\);\s*if \(!bArcGISPro32OrLater\)\s*\{\s*CPLAddXMLAttributeAndValue\(psFieldType,\s*"xmlns:typens",\s*"http://www\.esri\.com/schemas/ArcGIS/10\.3"\);\s*\}\s*' $createXmlLog 'CreateXMLFieldDefinition log'
   $content = Insert-AfterFirst $content '    const char \*pszAlias = poField->GetAlternativeNameRef\(\);\r?\n' $beforeCreateFieldLog 'CreateField-before-FileGDBField log'
   $content = Insert-AfterFirst $content '    if \(!m_poLyrTable->CreateField\(std::make_unique<FileGDBField>\(\s*poField->GetNameRef\(\),\s*pszAlias \? std::string\(pszAlias\) : std::string\(\), eType, bNullable,\s*bRequired, bEditable, nWidth, sDefault\)\)\)\s*\{\s*return OGRERR_FAILURE;\s*\}\s*' $afterCreateFieldLog 'CreateField-after-FileGDBField log'
   $content = Insert-AfterFirst $content '            const int nOGRIdx = m_poFeatureDefn->GetFieldIndex\(\s*poGDBFieldDefn->GetName\(\).c_str\(\)\);\s*' $refreshLog 'RefreshXMLDefinitionInMemory log'
@@ -284,7 +317,15 @@ function Assert-GdalPatchEffect([string] $GdalSrcDirName, [string] $PatchName) {
   if ($PatchName -eq 'gdal-openfilegdb-field-nullability.patch') {
     $missing = @(Get-GdalNullabilityMissingMarkers $content $false)
     if ($missing.Count -gt 0) {
-      throw "GDAL patch effect verification failed after $PatchName in $writer; missing markers: $($missing -join ', ')"
+      $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
+      $fieldPatchStat = Get-GdalPatchStat $gdalSrc (Join-Path $RootDir 'patches/gdal-openfilegdb-field-nullability.patch')
+      Write-Host "GDAL field patch markers missing after git apply; missing markers: $($missing -join ', '); git apply --stat: $fieldPatchStat"
+      Apply-GdalFieldNullabilityPatchInline $GdalSrcDirName
+      $content = Get-Content -Raw -LiteralPath $writer
+      $missing = @(Get-GdalNullabilityMissingMarkers $content $false)
+      if ($missing.Count -gt 0) {
+        throw "GDAL patch effect verification failed after $PatchName and inline fallback in $writer; missing markers: $($missing -join ', '); git apply --stat: $fieldPatchStat"
+      }
     }
   }
   if ($PatchName -eq 'gdal-openfilegdb-nullability-debug.patch') {
