@@ -166,6 +166,110 @@ function Get-GdalNullabilityMissingMarkers([string] $Content, [bool] $IncludeDeb
   return $missing
 }
 
+function Insert-AfterFirst([string] $Content, [string] $Pattern, [string] $Insertion, [string] $Label) {
+  $match = [regex]::Match($Content, $Pattern)
+  if (-not $match.Success) {
+    throw "GDAL inline debug patch context not found: $Label"
+  }
+  $insertAt = $match.Index + $match.Length
+  return $Content.Substring(0, $insertAt) + $Insertion + $Content.Substring($insertAt)
+}
+
+function Insert-BeforeFirst([string] $Content, [string] $Pattern, [string] $Insertion, [string] $Label) {
+  $match = [regex]::Match($Content, $Pattern)
+  if (-not $match.Success) {
+    throw "GDAL inline debug patch context not found: $Label"
+  }
+  return $Content.Substring(0, $match.Index) + $Insertion + $Content.Substring($match.Index)
+}
+
+function Apply-GdalNullabilityDebugPatchInline([string] $GdalSrcDirName) {
+  $writer = Get-GdalOpenFileGdbWriterPath $GdalSrcDirName
+  if (-not (Test-Path -LiteralPath $writer)) {
+    throw "GDAL OpenFileGDB writer source not found for inline debug patch: $writer"
+  }
+  $content = Get-Content -Raw -LiteralPath $writer
+  if ($content.Contains('OPENFGDB4J_DEBUG_NULLABILITY')) {
+    Write-Host 'GDAL inline debug patch skipped: debug guard already present'
+    return
+  }
+
+  $debugHelpers = @'
+
+static bool IsNullabilityDebugEnabled()
+{
+    const char *pszValue =
+        CPLGetConfigOption("OPENFGDB4J_DEBUG_NULLABILITY", nullptr);
+    return pszValue != nullptr && CPLTestBool(pszValue);
+}
+
+static void DebugNullabilityLog(const char *pszStage, const char *pszFieldName,
+                                int bFieldNullable, int bRequired,
+                                int bEditable, int nType, int nAuxValue)
+{
+    if (!IsNullabilityDebugEnabled())
+    {
+        return;
+    }
+    std::fprintf(stderr,
+                 "[openfgdb4j-nullability] writer-stage=%s field=%s "
+                 "nullable=%s required=%s editable=%s type=%d aux=%d\n",
+                 pszStage != nullptr ? pszStage : "<null>",
+                 pszFieldName != nullptr ? pszFieldName : "<null>",
+                 bFieldNullable ? "true" : "false",
+                 bRequired ? "true" : "false",
+                 bEditable ? "true" : "false", nType, nAuxValue);
+}
+'@
+  $createXmlLog = @'
+    DebugNullabilityLog("CreateXMLFieldDefinition", poFieldDefn->GetNameRef(),
+                        poGDBFieldDefn->IsNullable(),
+                        poGDBFieldDefn->IsRequired(),
+                        poGDBFieldDefn->IsEditable(),
+                        static_cast<int>(poGDBFieldDefn->GetType()),
+                        bArcGISPro32OrLater ? 1 : 0);
+'@
+  $beforeCreateFieldLog = @'
+    DebugNullabilityLog("CreateField-before-FileGDBField",
+                        poField->GetNameRef(), poField->IsNullable(),
+                        bRequired, bEditable, static_cast<int>(eType),
+                        bNullable ? 1 : 0);
+'@
+  $afterCreateFieldLog = @'
+
+    const auto poStoredField =
+        m_poLyrTable->GetField(m_poLyrTable->GetFieldCount() - 1);
+    if (poStoredField != nullptr)
+    {
+        DebugNullabilityLog("CreateField-after-FileGDBField",
+                            poStoredField->GetName().c_str(),
+                            poStoredField->IsNullable(),
+                            poStoredField->IsRequired(),
+                            poStoredField->IsEditable(),
+                            static_cast<int>(poStoredField->GetType()),
+                            m_poLyrTable->GetFieldCount() - 1);
+    }
+'@
+  $refreshLog = @'
+            DebugNullabilityLog("RefreshXMLDefinitionInMemory",
+                                poGDBFieldDefn->GetName().c_str(),
+                                poGDBFieldDefn->IsNullable(),
+                                poGDBFieldDefn->IsRequired(),
+                                poGDBFieldDefn->IsEditable(),
+                                static_cast<int>(poGDBFieldDefn->GetType()),
+                                nOGRIdx);
+'@
+
+  $content = Insert-AfterFirst $content '    return utf8string;\r?\n}\r?\n' $debugHelpers 'debug helpers after WStringToString'
+  $content = Insert-BeforeFirst $content '    CPLCreateXMLElementAndValue\(GPFieldInfoEx, "IsNullable",\r?\n                                poGDBFieldDefn->IsNullable\(\) \? "true"' $createXmlLog 'CreateXMLFieldDefinition log'
+  $content = Insert-AfterFirst $content '    const char \*pszAlias = poField->GetAlternativeNameRef\(\);\r?\n' $beforeCreateFieldLog 'CreateField-before-FileGDBField log'
+  $content = Insert-AfterFirst $content '    if \(!m_poLyrTable->CreateField\(std::make_unique<FileGDBField>\(\r?\n            poField->GetNameRef\(\),\r?\n            pszAlias \? std::string\(pszAlias\) : std::string\(\), eType, bNullable,\r?\n            bRequired, bEditable, nWidth, sDefault\)\)\)\r?\n    \{\r?\n        return OGRERR_FAILURE;\r?\n    \}\r?\n' $afterCreateFieldLog 'CreateField-after-FileGDBField log'
+  $content = Insert-AfterFirst $content '            const int nOGRIdx = m_poFeatureDefn->GetFieldIndex\(\r?\n                poGDBFieldDefn->GetName\(\).c_str\(\)\);\r?\n' $refreshLog 'RefreshXMLDefinitionInMemory log'
+
+  Set-Content -LiteralPath $writer -Value $content -NoNewline
+  Write-Host 'Applied GDAL inline debug patch fallback'
+}
+
 function Assert-GdalPatchEffect([string] $GdalSrcDirName, [string] $PatchName) {
   $writer = Get-GdalOpenFileGdbWriterPath $GdalSrcDirName
   if (-not (Test-Path -LiteralPath $writer)) {
@@ -181,7 +285,15 @@ function Assert-GdalPatchEffect([string] $GdalSrcDirName, [string] $PatchName) {
   if ($PatchName -eq 'gdal-openfilegdb-nullability-debug.patch') {
     $missing = @(Get-GdalNullabilityMissingMarkers $content $true)
     if ($missing.Count -gt 0) {
-      throw "GDAL patch effect verification failed after $PatchName in $writer; missing markers: $($missing -join ', ')"
+      $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
+      $debugPatchStat = Get-GdalPatchStat $gdalSrc (Get-GdalDebugPatchPath)
+      Write-Host "GDAL debug patch markers missing after git apply; missing markers: $($missing -join ', '); git apply --stat: $debugPatchStat"
+      Apply-GdalNullabilityDebugPatchInline $GdalSrcDirName
+      $content = Get-Content -Raw -LiteralPath $writer
+      $missing = @(Get-GdalNullabilityMissingMarkers $content $true)
+      if ($missing.Count -gt 0) {
+        throw "GDAL patch effect verification failed after $PatchName and inline fallback in $writer; missing markers: $($missing -join ', '); git apply --stat: $debugPatchStat"
+      }
     }
   }
 }
