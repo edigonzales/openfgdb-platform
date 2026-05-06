@@ -163,13 +163,27 @@ function Assert-GdalNullabilityPatchPresent([string] $GdalSrcDirName) {
     throw "GDAL OpenFileGDB writer source not found for verification: $writer"
   }
   $content = Get-Content -Raw -LiteralPath $writer
-  $expected = 'CPLCreateXMLElementAndValue(GPFieldInfoEx, "IsNullable",' 
-  $expectsFalse = 'poGDBFieldDefn->IsNullable() ? "true"'
-  $expectsTail = ': "false");'
-  $expectsDebugGuard = 'OPENFGDB4J_DEBUG_NULLABILITY'
-  $expectsDebugLog = 'DebugNullabilityLog("CreateField-before-FileGDBField"'
-  if (-not $content.Contains($expected) -or -not $content.Contains($expectsFalse) -or -not $content.Contains($expectsTail) -or -not $content.Contains($expectsDebugGuard) -or -not $content.Contains($expectsDebugLog)) {
-    throw "GDAL nullability patch verification failed in $writer"
+  $missing = @()
+  if ($content -notmatch 'CPLCreateXMLElementAndValue\(\s*GPFieldInfoEx,\s*"IsNullable",\s*poGDBFieldDefn->IsNullable\(\)\s*\?\s*"true"\s*:\s*"false"\s*\)') {
+    $missing += 'IsNullable true/false serialization'
+  }
+  if ($content -notmatch 'OPENFGDB4J_DEBUG_NULLABILITY') {
+    $missing += 'debug guard'
+  }
+  if ($content -notmatch 'DebugNullabilityLog\("CreateField-before-FileGDBField"') {
+    $missing += 'CreateField-before-FileGDBField log'
+  }
+  if ($content -notmatch 'DebugNullabilityLog\("CreateField-after-FileGDBField"') {
+    $missing += 'CreateField-after-FileGDBField log'
+  }
+  if ($content -notmatch 'DebugNullabilityLog\("RefreshXMLDefinitionInMemory"') {
+    $missing += 'RefreshXMLDefinitionInMemory log'
+  }
+  if ($content -notmatch 'DebugNullabilityLog\("CreateXMLFieldDefinition"') {
+    $missing += 'CreateXMLFieldDefinition log'
+  }
+  if ($missing.Count -gt 0) {
+    throw "GDAL nullability patch verification failed in $writer; missing markers: $($missing -join ', ')"
   }
   Write-Host "Verified GDAL patch in source tree: $writer"
 }
