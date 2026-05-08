@@ -159,8 +159,18 @@ struct TableState {
 };
 
 struct DomainState {
+  enum class Kind {
+    kCoded,
+    kRange
+  };
+
+  Kind kind = Kind::kCoded;
   std::string field_type;
   std::map<std::string, std::string> coded_values;
+  std::string min_value;
+  bool min_inclusive = true;
+  std::string max_value;
+  bool max_inclusive = true;
 };
 
 struct RelationshipState {
@@ -281,6 +291,17 @@ static std::unordered_map<std::string, StoredValue> make_item_row(
 
 static std::string build_domain_definition_xml(const std::string& domain_name, const DomainState& domain) {
   std::ostringstream out;
+  if (domain.kind == DomainState::Kind::kRange) {
+    out << "<RangeDomain name=\"" << domain_name << "\" fieldType=\"" << domain.field_type << "\">";
+    out << "<DomainName>" << domain_name << "</DomainName>";
+    out << "<FieldType>" << domain.field_type << "</FieldType>";
+    out << "<MinValue>" << domain.min_value << "</MinValue>";
+    out << "<MaxValue>" << domain.max_value << "</MaxValue>";
+    out << "<MinInclusive>" << (domain.min_inclusive ? "true" : "false") << "</MinInclusive>";
+    out << "<MaxInclusive>" << (domain.max_inclusive ? "true" : "false") << "</MaxInclusive>";
+    out << "</RangeDomain>";
+    return out.str();
+  }
   out << "<CodedValueDomain name=\"" << domain_name << "\" fieldType=\"" << domain.field_type << "\">";
   for (const auto& coded_value : domain.coded_values) {
     out << "<CodedValue code=\"" << coded_value.first << "\" name=\"" << coded_value.second << "\"/>";
@@ -300,6 +321,7 @@ static std::string build_relationship_definition_xml(const std::string& name, co
 
 static void rebuild_catalog_tables(DbState& db) {
   constexpr const char* kCodedDomainItemTypeUuid = "{8C5E4548-F3D3-11D4-9F42-00C04F6BC6A5}";
+  constexpr const char* kRangeDomainItemTypeUuid = "{c29da988-8c3e-45f7-8b5c-18e51ee7beb4}";
   constexpr const char* kRelationshipClassItemTypeUuid = "{725BADAB-3452-491B-A795-55F32D67229C}";
 
   TableState items;
@@ -307,8 +329,8 @@ static void rebuild_catalog_tables(DbState& db) {
   for (const auto& domain_entry : db.domains) {
     items.rows.push_back(make_item_row(
         domain_entry.first,
-        kCodedDomainItemTypeUuid,
-        "Coded Value Domain",
+        domain_entry.second.kind == DomainState::Kind::kRange ? kRangeDomainItemTypeUuid : kCodedDomainItemTypeUuid,
+        domain_entry.second.kind == DomainState::Kind::kRange ? "Range Domain" : "Coded Value Domain",
         build_domain_definition_xml(domain_entry.first, domain_entry.second)));
   }
   for (const auto& rel_entry : db.relationships) {
@@ -1169,7 +1191,45 @@ int NativeAdapter::create_coded_domain(uint64_t db_handle, const char* domain_na
     return OFGDB_OK;
   }
   DomainState domain;
+  domain.kind = DomainState::Kind::kCoded;
   domain.field_type = field_type != nullptr ? field_type : "STRING";
+  db->domains[domain_name] = std::move(domain);
+  rebuild_catalog_tables(*db);
+  return OFGDB_OK;
+}
+
+int NativeAdapter::create_range_domain(
+    uint64_t db_handle,
+    const char* domain_name,
+    const char* field_type,
+    const char* min_value,
+    int32_t min_inclusive,
+    const char* max_value,
+    int32_t max_inclusive) {
+  if (domain_name == nullptr || *domain_name == '\0') {
+    return fail(OFGDB_ERR_INVALID_ARG, "domain name missing");
+  }
+  if (field_type == nullptr || *field_type == '\0' || min_value == nullptr || max_value == nullptr) {
+    return fail(OFGDB_ERR_INVALID_ARG, "range domain parameters missing");
+  }
+
+  NativeState& st = NativeState::instance();
+  std::lock_guard<std::mutex> lock(st.mutex);
+  auto db = get_db_locked(st, db_handle);
+  if (!db) {
+    return fail(OFGDB_ERR_INVALID_ARG, "unknown db handle");
+  }
+  auto existing_it = db->domains.find(domain_name);
+  if (existing_it != db->domains.end()) {
+    return OFGDB_OK;
+  }
+  DomainState domain;
+  domain.kind = DomainState::Kind::kRange;
+  domain.field_type = field_type;
+  domain.min_value = min_value;
+  domain.min_inclusive = min_inclusive != 0;
+  domain.max_value = max_value;
+  domain.max_inclusive = max_inclusive != 0;
   db->domains[domain_name] = std::move(domain);
   rebuild_catalog_tables(*db);
   return OFGDB_OK;
@@ -1189,6 +1249,9 @@ int NativeAdapter::add_coded_value(uint64_t db_handle, const char* domain_name, 
   auto domain_it = db->domains.find(domain_name);
   if (domain_it == db->domains.end()) {
     return fail(OFGDB_ERR_NOT_FOUND, "domain does not exist");
+  }
+  if (domain_it->second.kind != DomainState::Kind::kCoded) {
+    return fail(OFGDB_ERR_INVALID_ARG, "domain is not coded");
   }
   domain_it->second.coded_values[code] = label != nullptr ? label : code;
   rebuild_catalog_tables(*db);

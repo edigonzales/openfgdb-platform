@@ -418,6 +418,35 @@ public final class OpenFgdb {
         }
     }
 
+    public void createRangeDomain(
+            long dbHandle,
+            String domainName,
+            String fieldType,
+            String minValue,
+            boolean minInclusive,
+            String maxValue,
+            boolean maxInclusive) throws OpenFgdbException {
+        MethodHandle mh = downcall(
+                "ofgdb_create_range_domain",
+                FunctionDescriptor.of(
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.JAVA_LONG,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.JAVA_INT,
+                        ValueLayout.ADDRESS,
+                        ValueLayout.JAVA_INT));
+        try (Arena arena = Arena.ofConfined()) {
+            MemorySegment domain = arena.allocateFrom(domainName);
+            MemorySegment type = arena.allocateFrom(fieldType);
+            MemorySegment min = arena.allocateFrom(minValue);
+            MemorySegment max = arena.allocateFrom(maxValue);
+            int rc = invokeInt(mh, dbHandle, domain, type, min, minInclusive ? 1 : 0, max, maxInclusive ? 1 : 0);
+            checkRc("ofgdb_create_range_domain", rc);
+        }
+    }
+
     public void addCodedValue(long dbHandle, String domainName, String code, String label) throws OpenFgdbException {
         MethodHandle mh = downcall(
                 "ofgdb_add_coded_value",

@@ -11,6 +11,7 @@
 #include "ogr_srs_api.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
@@ -451,6 +452,9 @@ OGRFieldType map_field_type_from_string(const std::string& in) {
 
 OGRFieldType map_field_type_from_symbolic_name(const std::string& in) {
   std::string type = to_upper_copy(trim(in));
+  if (type == "BIGINT" || type == "INT64" || type == "INTEGER64") {
+    return OFTInteger64;
+  }
   if (type == "INTEGER" || type == "INT" || type == "SMALLINT" || type == "SHORT" || type == "INT16" || type == "BOOLEAN") {
     return OFTInteger;
   }
@@ -477,7 +481,7 @@ OGRFieldSubType map_field_subtype_from_symbolic_name(const std::string& in) {
 std::string map_field_type_to_symbolic_name(OGRFieldType type, OGRFieldSubType subtype = OFSTNone) {
   switch (type) {
     case OFTInteger64:
-      return "INTEGER";
+      return "BIGINT";
     case OFTInteger:
       if (subtype == OFSTInt16) {
         return "SMALLINT";
@@ -489,6 +493,70 @@ std::string map_field_type_to_symbolic_name(OGRFieldType type, OGRFieldSubType s
       return "BLOB";
     default:
       return "STRING";
+  }
+}
+
+bool parse_range_field_value(
+    const std::string& value,
+    OGRFieldType field_type,
+    OGRField* out_field,
+    std::string* error_message) {
+  if (out_field == nullptr) {
+    if (error_message != nullptr) {
+      *error_message = "missing output field";
+    }
+    return false;
+  }
+  std::string trimmed = trim(value);
+  if (trimmed.empty()) {
+    if (error_message != nullptr) {
+      *error_message = "empty range value";
+    }
+    return false;
+  }
+  OGR_RawField_SetUnset(out_field);
+  char* end = nullptr;
+  errno = 0;
+  switch (field_type) {
+    case OFTInteger: {
+      long parsed = std::strtol(trimmed.c_str(), &end, 10);
+      if (errno != 0 || end == nullptr || *end != '\0' ||
+          parsed < std::numeric_limits<int>::min() || parsed > std::numeric_limits<int>::max()) {
+        if (error_message != nullptr) {
+          *error_message = std::string("invalid integer range value: ") + trimmed;
+        }
+        return false;
+      }
+      out_field->Integer = static_cast<int>(parsed);
+      return true;
+    }
+    case OFTInteger64: {
+      long long parsed = std::strtoll(trimmed.c_str(), &end, 10);
+      if (errno != 0 || end == nullptr || *end != '\0') {
+        if (error_message != nullptr) {
+          *error_message = std::string("invalid bigint range value: ") + trimmed;
+        }
+        return false;
+      }
+      out_field->Integer64 = static_cast<GIntBig>(parsed);
+      return true;
+    }
+    case OFTReal: {
+      double parsed = std::strtod(trimmed.c_str(), &end);
+      if (errno != 0 || end == nullptr || *end != '\0') {
+        if (error_message != nullptr) {
+          *error_message = std::string("invalid floating-point range value: ") + trimmed;
+        }
+        return false;
+      }
+      out_field->Real = parsed;
+      return true;
+    }
+    default:
+      if (error_message != nullptr) {
+        *error_message = std::string("unsupported range field type: ") + map_field_type_to_symbolic_name(field_type);
+      }
+      return false;
   }
 }
 
@@ -2613,6 +2681,64 @@ class GdalBackend final : public OpenFgdbBackend {
         return OFGDB_OK;
       }
       return fail(OFGDB_ERR_INTERNAL, std::string("failed to create coded domain: ") + reason);
+    }
+    CPLFree(failure_reason);
+    last_error_.clear();
+    return OFGDB_OK;
+  }
+
+  int create_range_domain(
+      uint64_t db_handle,
+      const char* domain_name,
+      const char* field_type,
+      const char* min_value,
+      int32_t min_inclusive,
+      const char* max_value,
+      int32_t max_inclusive) override {
+    if (domain_name == nullptr || *domain_name == '\0') {
+      return fail(OFGDB_ERR_INVALID_ARG, "domain name missing");
+    }
+    if (field_type == nullptr || *field_type == '\0' || min_value == nullptr || max_value == nullptr) {
+      return fail(OFGDB_ERR_INVALID_ARG, "range domain parameters missing");
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    DbState* db = get_db_locked(db_handle);
+    if (db == nullptr) {
+      return fail(OFGDB_ERR_INVALID_ARG, "unknown db handle");
+    }
+    OGRFieldDomainH existing = GDALDatasetGetFieldDomain(db->dataset, domain_name);
+    if (existing != nullptr) {
+      last_error_.clear();
+      return OFGDB_OK;
+    }
+
+    std::string requested_type = field_type;
+    OGRFieldType ogr_type = map_field_type_from_symbolic_name(requested_type);
+    OGRFieldSubType ogr_subtype = map_field_subtype_from_symbolic_name(requested_type);
+    OGRField min_field;
+    OGRField max_field;
+    std::string error_message;
+    if (!parse_range_field_value(min_value, ogr_type, &min_field, &error_message) ||
+        !parse_range_field_value(max_value, ogr_type, &max_field, &error_message)) {
+      return fail(OFGDB_ERR_INVALID_ARG, error_message);
+    }
+
+    OGRFieldDomainH domain = OGR_RangeFldDomain_Create(
+        domain_name, "", ogr_type, ogr_subtype, &min_field, min_inclusive != 0, &max_field, max_inclusive != 0);
+    if (domain == nullptr) {
+      return fail(OFGDB_ERR_INTERNAL, "failed to allocate range domain");
+    }
+    char* failure_reason = nullptr;
+    bool ok = GDALDatasetAddFieldDomain(db->dataset, domain, &failure_reason);
+    OGR_FldDomain_Destroy(domain);
+    if (!ok) {
+      std::string reason = failure_reason != nullptr ? failure_reason : "";
+      CPLFree(failure_reason);
+      if (contains_ci(reason, "already")) {
+        last_error_.clear();
+        return OFGDB_OK;
+      }
+      return fail(OFGDB_ERR_INTERNAL, std::string("failed to create range domain: ") + reason);
     }
     CPLFree(failure_reason);
     last_error_.clear();

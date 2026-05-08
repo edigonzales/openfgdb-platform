@@ -230,6 +230,43 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void rangeDomainIsPersistedAndAssigned() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Path dbDir = Files.createTempDirectory("openfgdb4j-range-domain-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_height(id INTEGER, height DOUBLE)");
+            api.createRangeDomain(dbCreate, "height_domain", "DOUBLE", "0.0", true, "1000.0", true);
+            api.createRangeDomain(dbCreate, "height_domain", "DOUBLE", "0.0", true, "1000.0", true);
+            api.assignDomainToField(dbCreate, "t_height", "height", "height_domain");
+            api.assignDomainToField(dbCreate, "t_height", "height", "height_domain");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            List<String> domains = api.listDomains(dbOpen);
+            assertTrue(domains.contains("height_domain"));
+
+            String tableDefinitionXml = readDefinitionXml(api, dbOpen, "t_height");
+            assertTrue(tableDefinitionXml != null && !tableDefinitionXml.isEmpty());
+            assertEquals("height_domain", findFieldDomainName(tableDefinitionXml, "height"));
+
+            String domainDefinitionXml = readDefinitionXml(api, dbOpen, "height_domain");
+            assertTrue(domainDefinitionXml != null && !domainDefinitionXml.isEmpty());
+            assertEquals("0", normalizeNumericText(findFirstTagText(domainDefinitionXml, "MinValue")));
+            assertEquals("1000", normalizeNumericText(findFirstTagText(domainDefinitionXml, "MaxValue")));
+
+            if (isRealGdal(api)) {
+                assertEquals("esriFieldTypeDouble", findFirstTagText(domainDefinitionXml, "FieldType"));
+            }
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
     public void deleteByEqWorks() throws Exception {
         OpenFgdb api = new OpenFgdb();
         Assume.assumeTrue(isRealGdal(api));
@@ -1539,6 +1576,17 @@ public class OpenFgdbSmokeTest {
             }
         }
         return null;
+    }
+
+    private static String normalizeNumericText(String numericText) {
+        if (numericText == null) {
+            return null;
+        }
+        double value = Double.parseDouble(numericText.trim());
+        if (Math.rint(value) == value) {
+            return Long.toString(Math.round(value));
+        }
+        return Double.toString(value);
     }
 
     private static String childTagText(Element parent, String tagName) {

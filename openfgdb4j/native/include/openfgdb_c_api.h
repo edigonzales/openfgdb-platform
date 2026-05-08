@@ -55,6 +55,9 @@ OFGDB_API int ofgdb_set_null(uint64_t row_handle, const char *column_name);
 
 OFGDB_API int ofgdb_list_domains(uint64_t db_handle, uint64_t *cursor_handle);
 OFGDB_API int ofgdb_create_coded_domain(uint64_t db_handle, const char *domain_name, const char *field_type);
+OFGDB_API int ofgdb_create_range_domain(uint64_t db_handle, const char *domain_name, const char *field_type,
+                                        const char *min_value, int32_t min_inclusive,
+                                        const char *max_value, int32_t max_inclusive);
 OFGDB_API int ofgdb_add_coded_value(uint64_t db_handle, const char *domain_name, const char *code, const char *label);
 OFGDB_API int ofgdb_assign_domain_to_field(uint64_t db_handle, const char *table_name, const char *column_name, const char *domain_name);
 

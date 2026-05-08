@@ -47,6 +47,14 @@ class OpenFgdbBackend {
 
   virtual int list_domains(uint64_t db_handle, uint64_t* cursor_handle) = 0;
   virtual int create_coded_domain(uint64_t db_handle, const char* domain_name, const char* field_type) = 0;
+  virtual int create_range_domain(
+      uint64_t db_handle,
+      const char* domain_name,
+      const char* field_type,
+      const char* min_value,
+      int32_t min_inclusive,
+      const char* max_value,
+      int32_t max_inclusive) = 0;
   virtual int add_coded_value(uint64_t db_handle, const char* domain_name, const char* code, const char* label) = 0;
   virtual int assign_domain_to_field(uint64_t db_handle, const char* table_name, const char* column_name, const char* domain_name) = 0;
 
@@ -107,6 +115,14 @@ class BackendDispatch {
   int set_null(uint64_t row_handle, const char* column_name);
   int list_domains(uint64_t db_handle, uint64_t* cursor_handle);
   int create_coded_domain(uint64_t db_handle, const char* domain_name, const char* field_type);
+  int create_range_domain(
+      uint64_t db_handle,
+      const char* domain_name,
+      const char* field_type,
+      const char* min_value,
+      int32_t min_inclusive,
+      const char* max_value,
+      int32_t max_inclusive);
   int add_coded_value(uint64_t db_handle, const char* domain_name, const char* code, const char* label);
   int assign_domain_to_field(uint64_t db_handle, const char* table_name, const char* column_name, const char* domain_name);
   int list_relationships(uint64_t db_handle, uint64_t* cursor_handle);

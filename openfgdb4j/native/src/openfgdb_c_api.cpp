@@ -106,6 +106,18 @@ int ofgdb_create_coded_domain(uint64_t db_handle, const char* domain_name, const
   return BackendDispatch::instance().create_coded_domain(db_handle, domain_name, field_type);
 }
 
+int ofgdb_create_range_domain(
+    uint64_t db_handle,
+    const char* domain_name,
+    const char* field_type,
+    const char* min_value,
+    int32_t min_inclusive,
+    const char* max_value,
+    int32_t max_inclusive) {
+  return BackendDispatch::instance().create_range_domain(
+      db_handle, domain_name, field_type, min_value, min_inclusive, max_value, max_inclusive);
+}
+
 int ofgdb_add_coded_value(uint64_t db_handle, const char* domain_name, const char* code, const char* label) {
   return BackendDispatch::instance().add_coded_value(db_handle, domain_name, code, label);
 }
