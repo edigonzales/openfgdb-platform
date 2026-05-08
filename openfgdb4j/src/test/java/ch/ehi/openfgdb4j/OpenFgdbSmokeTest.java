@@ -267,6 +267,43 @@ public class OpenFgdbSmokeTest {
     }
 
     @Test
+    public void bigintRangeDomainIsPersistedAndAssigned() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        Path dbDir = Files.createTempDirectory("openfgdb4j-range-domain-bigint-").resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_bigint(id INTEGER, measure BIGINT)");
+            api.createRangeDomain(dbCreate, "measure_domain", "BIGINT", "0", true, "9223372036854775807", true);
+            api.createRangeDomain(dbCreate, "measure_domain", "BIGINT", "0", true, "9223372036854775807", true);
+            api.assignDomainToField(dbCreate, "t_bigint", "measure", "measure_domain");
+            api.assignDomainToField(dbCreate, "t_bigint", "measure", "measure_domain");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            List<String> domains = api.listDomains(dbOpen);
+            assertTrue(domains.contains("measure_domain"));
+
+            String tableDefinitionXml = readDefinitionXml(api, dbOpen, "t_bigint");
+            assertTrue(tableDefinitionXml != null && !tableDefinitionXml.isEmpty());
+            assertEquals("measure_domain", findFieldDomainName(tableDefinitionXml, "measure"));
+
+            String domainDefinitionXml = readDefinitionXml(api, dbOpen, "measure_domain");
+            assertTrue(domainDefinitionXml != null && !domainDefinitionXml.isEmpty());
+            assertEquals("0", normalizeNumericText(findFirstTagText(domainDefinitionXml, "MinValue")));
+            assertEquals("9223372036854775807", normalizeNumericText(findFirstTagText(domainDefinitionXml, "MaxValue")));
+
+            if (isRealGdal(api)) {
+                assertEquals("esriFieldTypeBigInteger", findFirstTagText(domainDefinitionXml, "FieldType"));
+            }
+        } finally {
+            api.close(dbOpen);
+        }
+    }
+
+    @Test
     public void deleteByEqWorks() throws Exception {
         OpenFgdb api = new OpenFgdb();
         Assume.assumeTrue(isRealGdal(api));

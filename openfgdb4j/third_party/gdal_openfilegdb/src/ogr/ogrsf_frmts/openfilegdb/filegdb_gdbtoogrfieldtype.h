@@ -72,6 +72,11 @@ static bool GDBToOGRFieldType(const std::string &gdbType, OGRFieldType *pOut,
         *pOut = OFTInteger;
         return true;
     }
+    else if (gdbType == "esriFieldTypeBigInteger")
+    {
+        *pOut = OFTInteger64;
+        return true;
+    }
     else if (gdbType == "esriFieldTypeSingle")
     {
         *pSubType = OFSTFloat32;

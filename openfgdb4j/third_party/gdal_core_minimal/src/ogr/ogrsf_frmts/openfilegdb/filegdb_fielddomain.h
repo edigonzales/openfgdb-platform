@@ -294,6 +294,11 @@ inline std::string BuildXMLFieldDomainDef(const OGRFieldDomain *poDomain,
             CPLCreateXMLElementAndValue(psRoot, "FieldType",
                                         "esriFieldTypeInteger");
     }
+    else if (poDomain->GetFieldType() == OFTInteger64)
+    {
+        CPLCreateXMLElementAndValue(psRoot, "FieldType",
+                                    "esriFieldTypeBigInteger");
+    }
     else if (poDomain->GetFieldType() == OFTReal)
     {
         if (poDomain->GetFieldSubType() == OFSTFloat32)
@@ -362,6 +367,10 @@ inline std::string BuildXMLFieldDomainDef(const OGRFieldDomain *poDomain,
             else
                 CPLAddXMLAttributeAndValue(psParent, "xsi:type", "xs:int");
         }
+        else if (poDomain->GetFieldType() == OFTInteger64)
+        {
+            CPLAddXMLAttributeAndValue(psParent, "xsi:type", "xs:long");
+        }
         else if (poDomain->GetFieldType() == OFTReal)
         {
             if (poDomain->GetFieldSubType() == OFSTFloat32)
@@ -426,6 +435,13 @@ inline std::string BuildXMLFieldDomainDef(const OGRFieldDomain *poDomain,
                 {
                     CPLCreateXMLNode(psValue, CXT_Text,
                                      CPLSPrintf("%d", oValue.Integer));
+                }
+                else if (poDomain->GetFieldType() == OFTInteger64)
+                {
+                    CPLCreateXMLNode(psValue, CXT_Text,
+                                     CPLSPrintf(CPL_FRMT_GIB,
+                                                static_cast<GIntBig>(
+                                                    oValue.Integer64)));
                 }
                 else if (poDomain->GetFieldType() == OFTReal)
                 {
