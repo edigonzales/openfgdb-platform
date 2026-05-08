@@ -1,0 +1,15 @@
+diff --git a/ogr/ogrsf_frmts/openfilegdb/filegdb_gdbtoogrfieldtype.h b/ogr/ogrsf_frmts/openfilegdb/filegdb_gdbtoogrfieldtype.h
+--- a/ogr/ogrsf_frmts/openfilegdb/filegdb_gdbtoogrfieldtype.h
++++ b/ogr/ogrsf_frmts/openfilegdb/filegdb_gdbtoogrfieldtype.h
+@@ -63,6 +63,11 @@ static bool GDBToOGRFieldType(const std::string &gdbType, OGRFieldType *pOut,
+     {
+         *pOut = OFTInteger;
+         return true;
++    }
++    else if (gdbType == "esriFieldTypeBigInteger")
++    {
++        *pOut = OFTInteger64;
++        return true;
+     }
+     else if (gdbType == "esriFieldTypeSingle")
+     {

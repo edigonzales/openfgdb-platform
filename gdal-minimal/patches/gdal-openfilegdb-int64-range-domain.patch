@@ -1,0 +1,40 @@
+diff --git a/ogr/ogrsf_frmts/openfilegdb/filegdb_fielddomain.h b/ogr/ogrsf_frmts/openfilegdb/filegdb_fielddomain.h
+--- a/ogr/ogrsf_frmts/openfilegdb/filegdb_fielddomain.h
++++ b/ogr/ogrsf_frmts/openfilegdb/filegdb_fielddomain.h
+@@ -293,6 +293,11 @@
+         else
+             CPLCreateXMLElementAndValue(psRoot, "FieldType",
+                                         "esriFieldTypeInteger");
++    }
++    else if (poDomain->GetFieldType() == OFTInteger64)
++    {
++        CPLCreateXMLElementAndValue(psRoot, "FieldType",
++                                    "esriFieldTypeBigInteger");
+     }
+     else if (poDomain->GetFieldType() == OFTReal)
+     {
+@@ -361,6 +366,10 @@
+                 CPLAddXMLAttributeAndValue(psParent, "xsi:type", "xs:short");
+             else
+                 CPLAddXMLAttributeAndValue(psParent, "xsi:type", "xs:int");
++        }
++        else if (poDomain->GetFieldType() == OFTInteger64)
++        {
++            CPLAddXMLAttributeAndValue(psParent, "xsi:type", "xs:long");
+         }
+         else if (poDomain->GetFieldType() == OFTReal)
+         {
+@@ -427,6 +436,13 @@
+                     CPLCreateXMLNode(psValue, CXT_Text,
+                                      CPLSPrintf("%d", oValue.Integer));
+                 }
++                else if (poDomain->GetFieldType() == OFTInteger64)
++                {
++                    CPLCreateXMLNode(psValue, CXT_Text,
++                                     CPLSPrintf(CPL_FRMT_GIB,
++                                                static_cast<GIntBig>(
++                                                    oValue.Integer64)));
++                }
+                 else if (poDomain->GetFieldType() == OFTReal)
+                 {
+                     CPLCreateXMLNode(psValue, CXT_Text,
