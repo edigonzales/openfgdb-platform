@@ -6,8 +6,10 @@
 #include "cpl_error.h"
 #include "cpl_string.h"
 #include "gdal.h"
+#include "gdal_priv.h"
 #include "ogr_api.h"
 #include "ogr_core.h"
+#include "ogr_feature.h"
 #include "ogr_srs_api.h"
 
 #include <algorithm>
@@ -2723,24 +2725,33 @@ class GdalBackend final : public OpenFgdbBackend {
       return fail(OFGDB_ERR_INVALID_ARG, error_message);
     }
 
-    OGRFieldDomainH domain = OGR_RangeFldDomain_Create(
-        domain_name, "", ogr_type, ogr_subtype, &min_field, min_inclusive != 0, &max_field, max_inclusive != 0);
+    auto domain = std::make_unique<OGRRangeFieldDomain>(
+        domain_name,
+        "",
+        ogr_type,
+        ogr_subtype,
+        min_field,
+        min_inclusive != 0,
+        max_field,
+        max_inclusive != 0);
     if (domain == nullptr) {
       return fail(OFGDB_ERR_INTERNAL, "failed to allocate range domain");
     }
-    char* failure_reason = nullptr;
-    bool ok = GDALDatasetAddFieldDomain(db->dataset, domain, &failure_reason);
-    OGR_FldDomain_Destroy(domain);
+    std::string failure_reason;
+    bool ok = GDALDataset::FromHandle(db->dataset)->AddFieldDomain(std::move(domain), failure_reason);
     if (!ok) {
-      std::string reason = failure_reason != nullptr ? failure_reason : "";
-      CPLFree(failure_reason);
-      if (contains_ci(reason, "already")) {
+      if (contains_ci(failure_reason, "already")) {
         last_error_.clear();
         return OFGDB_OK;
       }
-      return fail(OFGDB_ERR_INTERNAL, std::string("failed to create range domain: ") + reason);
+      return fail(
+          OFGDB_ERR_INTERNAL,
+          std::string("failed to create range domain: ") + failure_reason +
+              " [requestedType=" + requested_type +
+              " ogrType=" + ogr_field_type_name_safe(ogr_type) +
+              " ogrTypeId=" + std::to_string(static_cast<int>(ogr_type)) +
+              " ogrSubtypeId=" + std::to_string(static_cast<int>(ogr_subtype)) + "]");
     }
-    CPLFree(failure_reason);
     last_error_.clear();
     return OFGDB_OK;
   }
