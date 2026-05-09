@@ -202,6 +202,28 @@ function Get-GdalRangeDomainMissingMarkers([string] $FieldDomainContent, [string
   return $missing
 }
 
+function Get-GdalInt64RangeDomainMissingMarkers([string] $FieldDomainContent) {
+  $missing = @()
+  if ($FieldDomainContent -notmatch 'CPLCreateXMLElementAndValue\(psRoot,\s*"FieldType",\s*"esriFieldTypeBigInteger"\)') {
+    $missing += 'range-domain FieldType esriFieldTypeBigInteger serialization'
+  }
+  if ($FieldDomainContent -notmatch 'CPLAddXMLAttributeAndValue\(psParent,\s*"xsi:type",\s*"xs:long"\)') {
+    $missing += 'range-domain xs:long XML scalar type'
+  }
+  if ($FieldDomainContent -notmatch 'CPLSPrintf\(CPL_FRMT_GIB,\s*static_cast<GIntBig>\(\s*oValue.Integer64\)\)') {
+    $missing += 'range-domain 64-bit MinValue/MaxValue formatter'
+  }
+  return $missing
+}
+
+function Get-GdalBigIntReadMappingMissingMarkers([string] $FieldTypeMapContent) {
+  $missing = @()
+  if ($FieldTypeMapContent -notmatch 'gdbType == "esriFieldTypeBigInteger"\)\s*\{\s*\*pOut = OFTInteger64;') {
+    $missing += 'range-domain esriFieldTypeBigInteger read mapping'
+  }
+  return $missing
+}
+
 function Insert-AfterFirst([string] $Content, [string] $Pattern, [string] $Insertion, [string] $Label) {
   $match = [regex]::Match($Content, $Pattern)
   if (-not $match.Success) {
@@ -367,8 +389,31 @@ function Assert-GdalPatchEffect([string] $GdalSrcDirName, [string] $PatchName) {
       }
     }
   }
-  if ($PatchName -eq 'gdal-openfilegdb-int64-range-domain.patch' -or $PatchName -eq 'gdal-openfilegdb-bigint-read.patch') {
-    Assert-GdalRangeDomainPatchPresent $GdalSrcDirName
+  if ($PatchName -eq 'gdal-openfilegdb-int64-range-domain.patch') {
+    $fieldDomain = Get-GdalOpenFileGdbFieldDomainPath $GdalSrcDirName
+    if (-not (Test-Path -LiteralPath $fieldDomain)) {
+      throw "GDAL OpenFileGDB field-domain source not found for patch verification: $fieldDomain"
+    }
+    $fieldDomainContent = Get-Content -Raw -LiteralPath $fieldDomain
+    $missing = @(Get-GdalInt64RangeDomainMissingMarkers $fieldDomainContent)
+    if ($missing.Count -gt 0) {
+      $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
+      $int64PatchStat = Get-GdalPatchStat $gdalSrc (Join-Path $RootDir 'patches/gdal-openfilegdb-int64-range-domain.patch')
+      throw "GDAL patch effect verification failed after $PatchName in $fieldDomain; missing markers: $($missing -join ', '); git apply --stat: $int64PatchStat"
+    }
+  }
+  if ($PatchName -eq 'gdal-openfilegdb-bigint-read.patch') {
+    $fieldTypeMap = Get-GdalOpenFileGdbFieldTypeMapPath $GdalSrcDirName
+    if (-not (Test-Path -LiteralPath $fieldTypeMap)) {
+      throw "GDAL OpenFileGDB type-map source not found for patch verification: $fieldTypeMap"
+    }
+    $fieldTypeMapContent = Get-Content -Raw -LiteralPath $fieldTypeMap
+    $missing = @(Get-GdalBigIntReadMappingMissingMarkers $fieldTypeMapContent)
+    if ($missing.Count -gt 0) {
+      $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
+      $readPatchStat = Get-GdalPatchStat $gdalSrc (Join-Path $RootDir 'patches/gdal-openfilegdb-bigint-read.patch')
+      throw "GDAL patch effect verification failed after $PatchName in $fieldTypeMap; missing markers: $($missing -join ', '); git apply --stat: $readPatchStat"
+    }
   }
 }
 
