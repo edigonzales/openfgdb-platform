@@ -189,16 +189,20 @@ function Get-GdalRangeDomainMissingMarkers([string] $FieldDomainContent, [string
   $missing = @()
   $fieldDomainCompact = Normalize-GdalSourceText $FieldDomainContent
   $fieldTypeMapCompact = Normalize-GdalSourceText $FieldTypeMapContent
-  if (-not $fieldDomainCompact.Contains('CPLCreateXMLElementAndValue(psRoot, "FieldType", "esriFieldTypeBigInteger")')) {
+  if (-not ($fieldDomainCompact.Contains('poDomain->GetFieldType() == OFTInteger64') -and
+            $fieldDomainCompact.Contains('esriFieldTypeBigInteger'))) {
     $missing += 'range-domain FieldType esriFieldTypeBigInteger serialization'
   }
-  if (-not $fieldDomainCompact.Contains('CPLAddXMLAttributeAndValue(psParent, "xsi:type", "xs:long")')) {
+  if (-not ($fieldDomainCompact.Contains('xsi:type') -and
+            $fieldDomainCompact.Contains('xs:long'))) {
     $missing += 'range-domain xs:long XML scalar type'
   }
-  if (-not $fieldDomainCompact.Contains('CPLSPrintf(CPL_FRMT_GIB, static_cast<GIntBig>( oValue.Integer64))')) {
+  if (-not ($fieldDomainCompact.Contains('CPL_FRMT_GIB') -and
+            $fieldDomainCompact.Contains('oValue.Integer64'))) {
     $missing += 'range-domain 64-bit MinValue/MaxValue formatter'
   }
-  if (-not $fieldTypeMapCompact.Contains('else if (gdbType == "esriFieldTypeBigInteger") { *pOut = OFTInteger64; return true; }')) {
+  if (-not ($fieldTypeMapCompact.Contains('gdbType == "esriFieldTypeBigInteger"') -and
+            $fieldTypeMapCompact.Contains('*pOut = OFTInteger64;'))) {
     $missing += 'range-domain esriFieldTypeBigInteger read mapping'
   }
   return $missing
@@ -214,13 +218,16 @@ function Normalize-GdalSourceText([string] $Content) {
 function Get-GdalInt64RangeDomainMissingMarkers([string] $FieldDomainContent) {
   $missing = @()
   $fieldDomainCompact = Normalize-GdalSourceText $FieldDomainContent
-  if (-not $fieldDomainCompact.Contains('CPLCreateXMLElementAndValue(psRoot, "FieldType", "esriFieldTypeBigInteger")')) {
+  if (-not ($fieldDomainCompact.Contains('poDomain->GetFieldType() == OFTInteger64') -and
+            $fieldDomainCompact.Contains('esriFieldTypeBigInteger'))) {
     $missing += 'range-domain FieldType esriFieldTypeBigInteger serialization'
   }
-  if (-not $fieldDomainCompact.Contains('CPLAddXMLAttributeAndValue(psParent, "xsi:type", "xs:long")')) {
+  if (-not ($fieldDomainCompact.Contains('xsi:type') -and
+            $fieldDomainCompact.Contains('xs:long'))) {
     $missing += 'range-domain xs:long XML scalar type'
   }
-  if (-not $fieldDomainCompact.Contains('CPLSPrintf(CPL_FRMT_GIB, static_cast<GIntBig>( oValue.Integer64))')) {
+  if (-not ($fieldDomainCompact.Contains('CPL_FRMT_GIB') -and
+            $fieldDomainCompact.Contains('oValue.Integer64'))) {
     $missing += 'range-domain 64-bit MinValue/MaxValue formatter'
   }
   return $missing
@@ -229,7 +236,8 @@ function Get-GdalInt64RangeDomainMissingMarkers([string] $FieldDomainContent) {
 function Get-GdalBigIntReadMappingMissingMarkers([string] $FieldTypeMapContent) {
   $missing = @()
   $fieldTypeMapCompact = Normalize-GdalSourceText $FieldTypeMapContent
-  if (-not $fieldTypeMapCompact.Contains('else if (gdbType == "esriFieldTypeBigInteger") { *pOut = OFTInteger64; return true; }')) {
+  if (-not ($fieldTypeMapCompact.Contains('gdbType == "esriFieldTypeBigInteger"') -and
+            $fieldTypeMapCompact.Contains('*pOut = OFTInteger64;'))) {
     $missing += 'range-domain esriFieldTypeBigInteger read mapping'
   }
   return $missing
