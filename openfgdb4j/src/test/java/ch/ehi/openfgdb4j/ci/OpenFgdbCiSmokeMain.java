@@ -4,6 +4,7 @@ import ch.ehi.openfgdb4j.OpenFgdb;
 import ch.ehi.openfgdb4j.OpenFgdbException;
 
 import java.io.IOException;
+import java.math.BigDecimal;
 import java.io.StringReader;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -28,11 +29,15 @@ public final class OpenFgdbCiSmokeMain {
     public static void main(String[] args) throws Exception {
         if (args.length != 1) {
             throw new IllegalArgumentException(
-                    "usage: OpenFgdbCiSmokeMain <gdal|adapter|nullability-metadata|gdal-fail|invalid-backend>");
+                    "usage: OpenFgdbCiSmokeMain <gdal|adapter|range-domain-roundtrip|nullability-metadata|gdal-fail|invalid-backend>");
         }
         String scenario = args[0];
         if ("gdal".equals(scenario) || "adapter".equals(scenario)) {
             runHappyPath(scenario);
+            return;
+        }
+        if ("range-domain-roundtrip".equals(scenario)) {
+            runRangeDomainRoundtripScenario();
             return;
         }
         if ("nullability-metadata".equals(scenario)) {
@@ -136,6 +141,49 @@ public final class OpenFgdbCiSmokeMain {
             assertFieldNullable(definitionXml, "id", Boolean.FALSE, runtimeInfo);
             assertFieldNullable(definitionXml, "name", Boolean.FALSE, runtimeInfo);
             assertFieldNullable(definitionXml, "opt", Boolean.TRUE, runtimeInfo);
+        } finally {
+            api.close(dbOpen);
+            deleteTreeQuiet(tempRoot);
+        }
+    }
+
+    private static void runRangeDomainRoundtripScenario() throws Exception {
+        OpenFgdb api = new OpenFgdb();
+        String runtimeInfo = api.getRuntimeInfo();
+        require(runtimeInfo.contains("backend=gdal") || runtimeInfo.contains("backend=adapter"),
+                "Range-domain scenario requires gdal or adapter backend: " + runtimeInfo);
+        boolean realGdal = runtimeInfo.contains("impl=real_gdal");
+
+        Path tempRoot = Files.createTempDirectory("openfgdb4j-range-domain-ci-");
+        Path dbDir = tempRoot.resolve("test.gdb");
+        long dbCreate = api.create(dbDir.toString());
+        try {
+            api.execSql(dbCreate, "CREATE TABLE t_height(id INTEGER, height DOUBLE)");
+            api.execSql(dbCreate, "CREATE TABLE t_bigint(id INTEGER, measure BIGINT)");
+
+            api.createRangeDomain(dbCreate, "height_domain", "DOUBLE", "0.0", true, "1000.0", true);
+            api.createRangeDomain(dbCreate, "height_domain", "DOUBLE", "0.0", true, "1000.0", true);
+            api.assignDomainToField(dbCreate, "t_height", "height", "height_domain");
+            api.assignDomainToField(dbCreate, "t_height", "height", "height_domain");
+
+            api.createRangeDomain(dbCreate, "measure_domain", "BIGINT", "0", true, "9223372036854775807", true);
+            api.createRangeDomain(dbCreate, "measure_domain", "BIGINT", "0", true, "9223372036854775807", true);
+            api.assignDomainToField(dbCreate, "t_bigint", "measure", "measure_domain");
+            api.assignDomainToField(dbCreate, "t_bigint", "measure", "measure_domain");
+        } finally {
+            api.close(dbCreate);
+        }
+
+        long dbOpen = api.open(dbDir.toString());
+        try {
+            List<String> domains = api.listDomains(dbOpen);
+            require(domains.contains("height_domain"), "Domain height_domain missing after reopen");
+            require(domains.contains("measure_domain"), "Domain measure_domain missing after reopen");
+            assertRangeDomainDefinition(api, dbOpen, "height_domain", "0", "1000", realGdal ? "esriFieldTypeDouble" : null);
+            assertRangeDomainDefinition(api, dbOpen, "measure_domain", "0", "9223372036854775807",
+                    realGdal ? "esriFieldTypeBigInteger" : null);
+            assertFieldDomainAssignmentIfAvailable(api, dbOpen, "t_height", "height", "height_domain");
+            assertFieldDomainAssignmentIfAvailable(api, dbOpen, "t_bigint", "measure", "measure_domain");
         } finally {
             api.close(dbOpen);
             deleteTreeQuiet(tempRoot);
@@ -904,6 +952,55 @@ public final class OpenFgdbCiSmokeMain {
         }
     }
 
+    private static void assertRangeDomainDefinition(OpenFgdb api, long dbHandle, String domainName, String expectedMinValue,
+            String expectedMaxValue, String expectedFieldType) throws Exception {
+        String domainDefinitionXml = readDefinitionXml(api, dbHandle, domainName);
+        require(domainDefinitionXml != null && !domainDefinitionXml.isEmpty(),
+                "Definition XML missing for range domain " + domainName);
+        require(expectedMinValue.equals(normalizeNumericText(findFirstTagText(domainDefinitionXml, "MinValue"))),
+                "Unexpected MinValue for range domain '" + domainName + "': definitionSnippet=\""
+                        + summarizeXml(domainDefinitionXml) + "\"");
+        require(expectedMaxValue.equals(normalizeNumericText(findFirstTagText(domainDefinitionXml, "MaxValue"))),
+                "Unexpected MaxValue for range domain '" + domainName + "': definitionSnippet=\""
+                        + summarizeXml(domainDefinitionXml) + "\"");
+        if (expectedFieldType != null) {
+            require(expectedFieldType.equals(findFirstTagText(domainDefinitionXml, "FieldType")),
+                    "Unexpected FieldType for range domain '" + domainName + "': definitionSnippet=\""
+                            + summarizeXml(domainDefinitionXml) + "\"");
+        }
+    }
+
+    private static void assertFieldDomainAssignmentIfAvailable(OpenFgdb api, long dbHandle, String tableName, String fieldName,
+            String expectedDomainName) throws Exception {
+        String tableDefinitionXml = readDefinitionXml(api, dbHandle, tableName);
+        if (tableDefinitionXml == null || tableDefinitionXml.isEmpty()) {
+            return;
+        }
+        String actualDomainName = findFieldDomainName(tableDefinitionXml, fieldName);
+        require(expectedDomainName.equals(actualDomainName),
+                "Unexpected DomainName for field '" + tableName + "." + fieldName + "': expected <" + expectedDomainName
+                        + "> but was <" + actualDomainName + ">; definitionSnippet=\"" + summarizeXml(tableDefinitionXml) + "\"");
+    }
+
+    private static String findFieldDomainName(String definitionXml, String fieldName) throws Exception {
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (!(node instanceof Element) || !nodeNameMatches(node, "GPFieldInfoEx")) {
+                continue;
+            }
+            Element fieldNode = (Element) node;
+            String currentFieldName = childTagText(fieldNode, "Name");
+            if (currentFieldName != null && currentFieldName.equalsIgnoreCase(fieldName)) {
+                return childTagText(fieldNode, "DomainName");
+            }
+        }
+        return null;
+    }
+
     private static void assertFieldNullable(String definitionXml, String fieldName, Boolean expectedNullable, String runtimeInfo) throws Exception {
         FieldNullableInspection inspection = inspectFieldNullable(definitionXml, fieldName);
         require(expectedNullable.equals(inspection.parsedNullable),
@@ -970,6 +1067,36 @@ public final class OpenFgdbCiSmokeMain {
             return normalized;
         }
         return normalized.substring(0, 300) + "...";
+    }
+
+    private static String findFirstTagText(String definitionXml, String tagName) throws Exception {
+        if (definitionXml == null || tagName == null) {
+            return null;
+        }
+        Document document = DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new InputSource(new StringReader(definitionXml)));
+        NodeList allNodes = document.getElementsByTagName("*");
+        for (int i = 0; i < allNodes.getLength(); i++) {
+            Node node = allNodes.item(i);
+            if (!(node instanceof Element) || !nodeNameMatches(node, tagName)) {
+                continue;
+            }
+            String textValue = node.getTextContent();
+            return textValue != null ? textValue.trim() : null;
+        }
+        return null;
+    }
+
+    private static String normalizeNumericText(String value) {
+        if (value == null) {
+            return null;
+        }
+        try {
+            return new BigDecimal(value.trim()).stripTrailingZeros().toPlainString();
+        } catch (NumberFormatException ignored) {
+            return value.trim();
+        }
     }
 
     private static String childTagText(Element parent, String tagName) {

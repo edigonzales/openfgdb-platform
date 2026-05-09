@@ -135,6 +135,8 @@ function Invoke-Scenario([string]$backend, [string]$scenario, [string]$gdalForce
 
 Invoke-Scenario 'gdal' 'gdal'
 Invoke-Scenario 'adapter' 'adapter'
+Invoke-Scenario 'gdal' 'range-domain-roundtrip'
+Invoke-Scenario 'adapter' 'range-domain-roundtrip'
 Invoke-Scenario 'gdal' 'nullability-metadata' '' $true
 Invoke-Scenario 'gdal' 'gdal-fail' '1'
 Invoke-Scenario 'invalid' 'invalid-backend'

@@ -129,6 +129,14 @@ function Get-GdalOpenFileGdbWriterPath([string] $GdalSrcDirName) {
   return (Join-Path $SrcDir "$GdalSrcDirName/ogr/ogrsf_frmts/openfilegdb/ogropenfilegdblayer_write.cpp")
 }
 
+function Get-GdalOpenFileGdbFieldDomainPath([string] $GdalSrcDirName) {
+  return (Join-Path $SrcDir "$GdalSrcDirName/ogr/ogrsf_frmts/openfilegdb/filegdb_fielddomain.h")
+}
+
+function Get-GdalOpenFileGdbFieldTypeMapPath([string] $GdalSrcDirName) {
+  return (Join-Path $SrcDir "$GdalSrcDirName/ogr/ogrsf_frmts/openfilegdb/filegdb_gdbtoogrfieldtype.h")
+}
+
 function Get-GdalDebugPatchPath {
   return (Join-Path $RootDir 'patches/gdal-openfilegdb-nullability-debug.patch')
 }
@@ -173,6 +181,23 @@ function Get-GdalNullabilityMissingMarkers([string] $Content, [bool] $IncludeDeb
     if ($Content -notmatch 'DebugNullabilityLog\("RefreshXMLDefinitionInMemory"') {
       $missing += 'RefreshXMLDefinitionInMemory log'
     }
+  }
+  return $missing
+}
+
+function Get-GdalRangeDomainMissingMarkers([string] $FieldDomainContent, [string] $FieldTypeMapContent) {
+  $missing = @()
+  if ($FieldDomainContent -notmatch 'CPLCreateXMLElementAndValue\(psRoot,\s*"FieldType",\s*"esriFieldTypeBigInteger"\)') {
+    $missing += 'range-domain FieldType esriFieldTypeBigInteger serialization'
+  }
+  if ($FieldDomainContent -notmatch 'CPLAddXMLAttributeAndValue\(psParent,\s*"xsi:type",\s*"xs:long"\)') {
+    $missing += 'range-domain xs:long XML scalar type'
+  }
+  if ($FieldDomainContent -notmatch 'CPLSPrintf\(CPL_FRMT_GIB,\s*static_cast<GIntBig>\(\s*oValue.Integer64\)\)') {
+    $missing += 'range-domain 64-bit MinValue/MaxValue formatter'
+  }
+  if ($FieldTypeMapContent -notmatch 'gdbType == "esriFieldTypeBigInteger"\)\s*\{\s*\*pOut = OFTInteger64;') {
+    $missing += 'range-domain esriFieldTypeBigInteger read mapping'
   }
   return $missing
 }
@@ -342,6 +367,9 @@ function Assert-GdalPatchEffect([string] $GdalSrcDirName, [string] $PatchName) {
       }
     }
   }
+  if ($PatchName -eq 'gdal-openfilegdb-int64-range-domain.patch' -or $PatchName -eq 'gdal-openfilegdb-bigint-read.patch') {
+    Assert-GdalRangeDomainPatchPresent $GdalSrcDirName
+  }
 }
 
 function Apply-GdalPatches([string] $GdalSrcDirName) {
@@ -404,6 +432,33 @@ function Assert-GdalNullabilityPatchPresent([string] $GdalSrcDirName) {
     throw "GDAL nullability patch verification failed in $writer; missing markers: $($missing -join ', '); applied patches: $appliedPatchNames; debug patch git apply --stat: $debugPatchStat"
   }
   Write-Host "Verified GDAL patch in source tree: $writer"
+}
+
+function Assert-GdalRangeDomainPatchPresent([string] $GdalSrcDirName) {
+  $fieldDomain = Get-GdalOpenFileGdbFieldDomainPath $GdalSrcDirName
+  $fieldTypeMap = Get-GdalOpenFileGdbFieldTypeMapPath $GdalSrcDirName
+  if (-not (Test-Path -LiteralPath $fieldDomain)) {
+    throw "GDAL OpenFileGDB field-domain source not found for verification: $fieldDomain"
+  }
+  if (-not (Test-Path -LiteralPath $fieldTypeMap)) {
+    throw "GDAL OpenFileGDB type-map source not found for verification: $fieldTypeMap"
+  }
+  $fieldDomainContent = Get-Content -Raw -LiteralPath $fieldDomain
+  $fieldTypeMapContent = Get-Content -Raw -LiteralPath $fieldTypeMap
+  $missing = @(Get-GdalRangeDomainMissingMarkers $fieldDomainContent $fieldTypeMapContent)
+  if ($missing.Count -gt 0) {
+    $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
+    $int64PatchPath = Join-Path $RootDir 'patches/gdal-openfilegdb-int64-range-domain.patch'
+    $readPatchPath = Join-Path $RootDir 'patches/gdal-openfilegdb-bigint-read.patch'
+    $int64PatchStat = Get-GdalPatchStat $gdalSrc $int64PatchPath
+    $readPatchStat = Get-GdalPatchStat $gdalSrc $readPatchPath
+    $appliedPatchNames = '<none>'
+    if ($script:AppliedGdalPatchNames -and $script:AppliedGdalPatchNames.Count -gt 0) {
+      $appliedPatchNames = $script:AppliedGdalPatchNames -join ', '
+    }
+    throw "GDAL range-domain patch verification failed in $fieldDomain and $fieldTypeMap; missing markers: $($missing -join ', '); applied patches: $appliedPatchNames; int64 patch git apply --stat: $int64PatchStat; read patch git apply --stat: $readPatchStat"
+  }
+  Write-Host "Verified GDAL range-domain patches in source tree: $fieldDomain ; $fieldTypeMap"
 }
 
 function Get-VsDevCmdPath {
@@ -523,6 +578,7 @@ Extract-Archive $ProjArchive $ProjSrcDirName
 Extract-Archive $SqliteArchive $SqliteSrcDirName
 Apply-GdalPatches $GdalSrcDirName
 Assert-GdalNullabilityPatchPresent $GdalSrcDirName
+Assert-GdalRangeDomainPatchPresent $GdalSrcDirName
 
 $SqliteLib = Join-Path $StageDir 'lib/sqlite3.lib'
 if (-not (Test-Path -LiteralPath $SqliteLib)) {

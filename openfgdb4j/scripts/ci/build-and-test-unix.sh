@@ -79,6 +79,8 @@ run_scenario() {
 
 run_scenario gdal gdal env
 run_scenario adapter adapter env
+run_scenario gdal range-domain-roundtrip env
+run_scenario adapter range-domain-roundtrip env
 run_scenario gdal nullability-metadata env
 run_scenario gdal gdal-fail env OPENFGDB4J_GDAL_FORCE_FAIL=1
 run_scenario invalid invalid-backend env
