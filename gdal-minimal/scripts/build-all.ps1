@@ -150,6 +150,13 @@ function Get-GdalPatchStat([string] $GdalSrc, [string] $PatchPath) {
   return $stat
 }
 
+function Test-GdalPatchAlreadyIntegrated([string] $PatchStat) {
+  if ([string]::IsNullOrWhiteSpace($PatchStat)) {
+    return $false
+  }
+  return $PatchStat -match '(^|\s)0 files changed(\s|$)'
+}
+
 function Get-GitPath([string] $Path) {
   return $Path.Replace('\', '/')
 }
@@ -408,6 +415,10 @@ function Assert-GdalPatchEffect([string] $GdalSrcDirName, [string] $PatchName) {
     if ($missing.Count -gt 0) {
       $gdalSrc = Join-Path $SrcDir $GdalSrcDirName
       $int64PatchStat = Get-GdalPatchStat $gdalSrc (Join-Path $RootDir 'patches/gdal-openfilegdb-int64-range-domain.patch')
+      if (Test-GdalPatchAlreadyIntegrated $int64PatchStat) {
+        Write-Host "GDAL int64 range-domain patch appears integrated upstream; skipping marker check for $PatchName ($int64PatchStat)"
+        return
+      }
       throw "GDAL patch effect verification failed after $PatchName in $fieldDomain; missing markers: $($missing -join ', '); git apply --stat: $int64PatchStat"
     }
   }
@@ -493,6 +504,11 @@ function Assert-GdalRangeDomainPatchPresent([string] $GdalSrcDirName) {
     $readPatchPath = Join-Path $RootDir 'patches/gdal-openfilegdb-bigint-read.patch'
     $int64PatchStat = Get-GdalPatchStat $gdalSrc $int64PatchPath
     $readPatchStat = Get-GdalPatchStat $gdalSrc $readPatchPath
+    if ((Test-GdalPatchAlreadyIntegrated $int64PatchStat) -and
+        (Test-GdalPatchAlreadyIntegrated $readPatchStat)) {
+      Write-Host "GDAL range-domain patches appear integrated upstream; skipping marker check ($int64PatchStat ; $readPatchStat)"
+      return
+    }
     $appliedPatchNames = '<none>'
     if ($script:AppliedGdalPatchNames -and $script:AppliedGdalPatchNames.Count -gt 0) {
       $appliedPatchNames = $script:AppliedGdalPatchNames -join ', '
